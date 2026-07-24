@@ -32,17 +32,21 @@ que llegue, marcado `"parcial"` con una nota. El registro histórico
 (`raw_payloads`) siempre guarda el ciclo tal cual llegó, degradado o no —
 la guarda solo afecta lo publicado en `cortes.json`.
 
-Aviso a Slack cuando la guarda gatilla (pedido explícito: "que me entere de
-una degradación SEC en el momento, no por un cliente"). Reusa el mismo
-webhook y patrón que ingesta/watchdog.py._post_slack (contenedor `ingesta`,
-mismo env SLACK_WEBHOOK_URL, ver docker-compose.yml); dormido sin webhook
-configurado, nunca propaga la URL en un error. Anti-spam: un solo aviso al
-empezar a retener (se detecta comparando si el `previo` ya venía marcado
-"parcial" — no hace falta un archivo de estado aparte, el propio
-cortes.json retenido ES el estado) y uno al agotarse la retención; ninguno
-se repite por ciclo mientras la degradación persiste. Un fallo del POST a
-Slack nunca debe impedir que se publique/retenga cortes.json — _post_slack
-atrapa cualquier excepción y su resultado se ignora en el flujo principal.
+Aviso a Slack SOLO cuando la retención se agota (ajuste 2026-07-24): el
+aviso original también sonaba al EMPEZAR a retener, pero los colapsos
+rutinarios de la SEC a las HH:15 (ver más arriba) gatillan varios episodios
+por día y la propia guarda los resuelve sola al ciclo siguiente — no hay
+acción posible del operador, así que ese aviso era puro ruido. El inicio de
+la retención queda solo en el log de ingesta (`print`); Slack avisa
+únicamente cuando la degradación persiste más de RETENCION_MAX_MIN y se
+publican datos posiblemente incompletos, que sí es accionable. Reusa el
+mismo webhook y patrón que ingesta/watchdog.py._post_slack (contenedor
+`ingesta`, mismo env SLACK_WEBHOOK_URL, ver docker-compose.yml); dormido sin
+webhook configurado, nunca propaga la URL en un error. El aviso de
+retención agotada no se repite por ciclo mientras la degradación persiste
+(ver comentario junto a su llamada). Un fallo del POST a Slack nunca debe
+impedir que se publique/retenga cortes.json — _post_slack atrapa cualquier
+excepción y su resultado se ignora en el flujo principal.
 """
 import json
 import sys
@@ -239,15 +243,6 @@ def update(con, fetched_at: str) -> int:
         # marcado parcial+nota. "updated" no se toca a propósito.
         n_previo = previo.get("n_comunas") or 0
         print(f"[aviso] ciclo SEC degradado: {len(cortes)} comunas vs {n_previo} del ciclo anterior — se retiene el último ciclo completo")
-        # Anti-spam: solo el ciclo que EMPIEZA a retener avisa a Slack (el
-        # propio previo ya marcado "parcial" es la señal de que ya se avisó;
-        # no hace falta un archivo de estado aparte).
-        if config.SLACK_WEBHOOK_URL and previo.get("parcial") is not True:
-            _post_slack(
-                f":warning: *Vigía* — SEC ciclo degradado: {len(cortes)} comunas "
-                f"(previo {n_previo}). Publicando el último ciclo completo de "
-                f"{previo.get('updated', '?')}."
-            )
         previo["parcial"] = True
         previo["nota"] = (
             f"Ciclo SEC degradado ({len(cortes)} comunas vs {n_previo} del "
