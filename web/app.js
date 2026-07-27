@@ -1636,7 +1636,9 @@ function basemapGuardado() {
     const raw = localStorage.getItem('sinoptica.basemap');
     if (raw === 'satelital' || raw === 'calles') return raw;
   } catch (_) { /* localStorage puede no estar disponible */ }
-  return 'calles';
+  // Default para usuarios nuevos (sin preferencia guardada): satelital.
+  // Si ya hay algo en localStorage, se respeta arriba sin llegar aquí.
+  return 'satelital';
 }
 let mapaBase = basemapGuardado();
 

@@ -1104,6 +1104,11 @@ dialog::backdrop {
 .pp-alto { background-color: var(--pp-alto); }
 .pp-severo { background-color: var(--pp-severo); }
 .stn-label.pp-alto, .stn-label.pp-severo { color: #fff; border-color: rgba(0,0,0,0.35); }
+/* pp-0 ("sin lluvia") usa --pp-0, que en modo oscuro pasa a ser un azul
+   marino casi tan oscuro como el texto fijo #0b111d de .stn-label (bug real:
+   1.44:1 de contraste, invisible sobre el basemap oscuro) — var(--ink) sigue
+   el tema en vez de quedar fijo. */
+.stn-label.pp-0 { color: var(--ink); }
 
 .stn-icon { background: none; border: none; }
 
@@ -1121,12 +1126,18 @@ dialog::backdrop {
 }
 
 /* Fondo fijo para combustible: es la única capa que usa stn-label sin una
-   clase de nivel propia (pp-*/tc*/icap-* ya traen su color), así que sin
+   clase de nivel propia (pp-*, tc*, icap-* ya traen su color), así que sin
    esto se leía bien sobre "Calles" (casi blanco) pero se perdía sobre
    "Satelital" (imagen fotográfica). Selector de 2 clases a propósito: si
    fuera background-color en .stn-label directo, pisaría por orden de
-   cascada (misma especificidad) el color de pp-*/tc*/icap-*, que se
-   declaran ANTES en este archivo — regresión real, ya se dio una vez. */
+   cascada (misma especificidad) el color de pp-*, tc*, icap-*, que se
+   declaran ANTES en este archivo — regresión real, ya se dio una vez.
+   OJO: nunca escribir un asterisco pegado a una barra dentro de este
+   comentario (los separadores de arriba van con coma, no con barra, a
+   propósito) — esos dos símbolos juntos cierran el comentario CSS antes de
+   tiempo y el navegador descarta en silencio la regla siguiente completa
+   (bug real: así quedó muerta esta misma regla de fondo, que nunca se
+   aplicó). */
 .stn-label.combustible-precio { background-color: #fcfaf4; }
 
 .stn-popup strong { display: block; font-size: 0.9rem; margin-bottom: 2px; }
@@ -1628,9 +1639,13 @@ dialog::backdrop {
 }
 
 /* Grupo: mismo patrón que .foco-grupo (reutiliza .stn-label), pero con un
-   fondo neutro en vez del naranja de incendios. */
+   fondo neutro en vez del naranja de incendios. background-color usa
+   --bg-panel (fondo del panel, oscuro en tema oscuro) mientras .stn-label
+   deja el texto fijo en #0b111d (bug real: 1.07:1 de contraste, invisible
+   en modo oscuro) — var(--ink) sigue el tema. */
 .emg-grupo {
   background-color: var(--bg-panel);
+  color: var(--ink);
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -1678,9 +1693,12 @@ dialog::backdrop {
 }
 
 /* Grupo (zoom < 9): mismo patrón que .emg-grupo (reutiliza .stn-label con
-   fondo neutro): es un catastro histórico, no una emergencia activa. */
+   fondo neutro): es un catastro histórico, no una emergencia activa.
+   Mismo fix de contraste que .emg-grupo: color: var(--ink) sigue el tema
+   en vez del texto fijo de .stn-label (invisible en modo oscuro). */
 .rem-grupo {
   background-color: var(--bg-panel);
+  color: var(--ink);
   display: inline-flex;
   align-items: center;
   gap: 3px;
