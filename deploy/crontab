@@ -17,9 +17,6 @@
 # SLACK_WEBHOOK_URL — no es un paso de ingesta, se invoca directo como
 # push/send.py.
 4,14,24,34,44,54 * * * * python3 /app/ingesta/watchdog.py >> /data/ingesta.log 2>&1
-# resumen diario de tráfico (Cloudflare Analytics) a Slack, dormido sin
-# CF_ANALYTICS_TOKEN/CF_ZONE_ID/SLACK_WEBHOOK_URL — tampoco es paso de ingesta.
-35 8 * * * python3 /app/ingesta/analytics_diario.py >> /data/ingesta.log 2>&1
 7 * * * * python3 /app/ingesta/run.py >> /data/ingesta.log 2>&1
 37 1,13 * * * python3 /app/ingesta/run.py --forecasts >> /data/ingesta.log 2>&1
 */2 * * * * python3 /app/ingesta/run.py --sismos >> /data/ingesta.log 2>&1
