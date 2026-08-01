@@ -62,7 +62,11 @@ HOURLY_VARS = [
 HORIZON_HOURS = 168         # 7 días: horizonte del determinista (medido 2026-07-13, sigue en el mínimo de costo de Open-Meteo)
 ENSEMBLE_HORIZON_HOURS = 96  # 4 días: el ensamble no se extiende, sigue siendo solo para el rango calibrable
 ENSEMBLE_MODEL = "ecmwf_ifs025"
-ENSEMBLE_VARS = ["temperature_2m"]
+# Open-Meteo no sirve miembros históricos: lo que no se archiva hoy es
+# irrecuperable. Verificado en vivo 2026-08-01 contra la API real: las 3
+# vars devuelven 51 miembros (control + 50 perturbados) sin colisión de
+# prefijos, formato de sufijo "_memberNN" (dos dígitos, int() lo tolera).
+ENSEMBLE_VARS = ["temperature_2m", "wind_speed_10m", "precipitation"]
 
 API_FORECAST = "https://api.open-meteo.com/v1/forecast"
 API_ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
