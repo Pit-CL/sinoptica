@@ -101,7 +101,7 @@
       } catch (e) { /* sin localStorage: queda auto */ }
     })();
   </script>
-  <link rel="stylesheet" href="app.css?v=109">
+  <link rel="stylesheet" href="app.css?v=110">
 </head>
 <body>
 
@@ -477,6 +477,23 @@
     <p id="verif-caveat" class="verif-caveat" hidden></p>
     <ol id="verif-list" class="verif-list"></ol>
     <p class="panel-note">Cada pronóstico archivado se compara después con lo que <strong>realmente midieron</strong> las estaciones de la red nacional. El error promedio (MAE) dice cuántos grados se equivocó típicamente cada modelo. Casi ninguna app del mundo publica sus errores: nosotros sí, porque la confianza se gana con datos.</p>
+
+    <div id="verif-avisos" class="verif-avisos" hidden>
+      <div class="panel-head verif-avisos-head">
+        <h3>Avisos: aciertos y falsas alarmas</h3>
+        <button class="info-btn" data-info="avisos-verif" aria-label="¿Qué significan POD y FAR?">?</button>
+      </div>
+      <p id="verif-avisos-meta" class="panel-meta"></p>
+      <div class="table-wrap">
+        <table class="model-table verif-avisos-table">
+          <thead>
+            <tr><th scope="col">Tipo</th><th scope="col">Detección</th><th scope="col">Falsas alarmas</th><th scope="col">CSI</th><th scope="col">n</th></tr>
+          </thead>
+          <tbody id="verif-avisos-body"></tbody>
+        </table>
+      </div>
+      <p class="panel-note">Los avisos propios de Vigía (viento, helada, lluvia, calor, ola de calor/frío, caída de presión) también se verifican contra lo que midieron las estaciones. Detección (POD) y falsas alarmas (FAR) miden algo distinto al error de temperatura de arriba: aquí no importa cuánto se erró, sino si el aviso acertó o no.</p>
+    </div>
   </section>
 
   <p id="error" class="error" hidden></p>
@@ -527,6 +544,6 @@
 
 <script src="vendor/chart.umd.min.js" defer></script>
 <script src="vendor/leaflet.js" defer></script>
-<script src="app.js?v=109" defer></script>
+<script src="app.js?v=110" defer></script>
 </body>
 </html>

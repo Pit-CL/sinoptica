@@ -211,6 +211,15 @@ const INFO = {
 <p><strong>Persistencia (referencia):</strong> el pronóstico más simple que existe — asumir que el clima sigue igual a como estaba hace tantas horas como el plazo evaluado. No es un modelo, es la vara mínima: cualquier modelo serio debería superarla. El porcentaje junto al MAE de cada modelo (ej. «+34%») es su <em>skill</em>: cuánto menor es su error frente al de la persistencia en ese mismo plazo — positivo, le gana; negativo, pierde contra la comparación más ingenua posible.</p>
 <p class="info-fine">Ventana móvil: últimos 14 días, todas las estaciones, todas las horas. El número «n» son los pares pronóstico-observación evaluados: con n chico las cifras bailan; con miles, se estabilizan. Este archivo partió el 9 de junio de 2026 y mejora solo con cada hora que pasa.</p>`,
   },
+  'avisos-verif': {
+    title: '¿Qué significan POD, FAR y CSI?',
+    html: `
+<p><strong>El método:</strong> los avisos propios de Vigía (no los oficiales) también se archivan al emitirse y se comparan después con lo que las estaciones realmente midieron, con una tolerancia de ±3 h.</p>
+<p><strong>POD — detección:</strong> de los eventos que de verdad ocurrieron (la observación cruzó el umbral), en cuántos ya habíamos avisado antes. Más alto es mejor: 90% significa que solo se nos escapó 1 de cada 10.</p>
+<p><strong>FAR — falsas alarmas:</strong> de los avisos que emitimos, cuántos NO se llegaron a concretar. Más bajo es mejor: 30% significa que 3 de cada 10 avisos fueron una alarma sin evento real después.</p>
+<p><strong>CSI:</strong> un solo número que resume ambos a la vez (aciertos sobre el total de aciertos + falsas alarmas + eventos no avisados). 1,0 sería perfecto; 0 sería no acertar nunca.</p>
+<p class="info-fine">Ventana móvil: últimos 14 días. Solo se verifican los tipos con una variable observable directamente en la red (viento, helada, calor, ola de calor/frío, caída de presión, lluvia): nieve, ráfagas, tormenta, UV y los avisos compuestos (aluvional, incendio, nieve en cota baja) no tienen un dato de estación equivalente y quedan fuera por ahora. Con pocos avisos evaluados (n chico) la cifra puede cambiar mucho con el próximo aviso — esas filas se muestran atenuadas.</p>`,
+  },
   riesgos: {
     title: '¿De dónde salen estos datos?',
     html: `
@@ -1138,6 +1147,7 @@ async function loadVerif() {
     if (!res.ok) return;
     verifData = await res.json();
     renderVerif();
+    renderVerifAvisos();
   } catch (_) { /* sin archivo aún */ }
 }
 
@@ -1212,6 +1222,48 @@ function renderVerif() {
     bar.style.width = `${Math.max(6, (maePers / maxMae) * 100)}%`;
     list.appendChild(li);
   }
+}
+
+// Avisos propios de Vigía: ¿aciertan? — POD (detección), FAR (falsas
+// alarmas) y CSI por tipo, calculados en ingesta/verify_avisos.py contra
+// observaciones reales. Reutiliza AVISO_EMOJI/AVISO_TIPO_LABEL (más abajo en
+// este archivo, ya usados por la capa de avisos del mapa) para no duplicar
+// etiquetas. Si la sección 'avisos' no viene en el JSON o no tiene ningún
+// tipo con muestra (n=0 en todos), la subsección queda oculta sin error.
+function renderVerifAvisos() {
+  const wrap = $('#verif-avisos');
+  const tbody = $('#verif-avisos-body');
+  const meta = $('#verif-avisos-meta');
+  if (!wrap || !tbody || !meta) return;
+
+  const avisos = verifData && verifData.avisos;
+  const tipos = avisos && avisos.tipos
+    ? Object.entries(avisos.tipos).filter(([, r]) => r.n > 0)
+    : [];
+  if (!tipos.length) { wrap.hidden = true; return; }
+
+  tipos.sort((a, b) => b[1].n - a[1].n);
+  tbody.innerHTML = '';
+  tipos.forEach(([tipo, r]) => {
+    const tr = document.createElement('tr');
+    if (r.muestra_insuficiente) {
+      tr.className = 'muestra-insuficiente';
+      tr.title = 'Muestra chica (n < 10): la cifra puede cambiar mucho con el próximo aviso.';
+    }
+    const pod = r.pod != null ? `${Math.round(r.pod * 100)}%` : '—';
+    const far = r.far != null ? `${Math.round(r.far * 100)}%` : '—';
+    const csi = r.csi != null ? r.csi.toFixed(2) : '—';
+    tr.innerHTML = `
+      <td>${AVISO_EMOJI[tipo] || ''} ${AVISO_TIPO_LABEL[tipo] || tipo}</td>
+      <td>${pod}</td>
+      <td>${far}</td>
+      <td>${csi}</td>
+      <td>${r.hits}/${r.falsas}/${r.misses}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  meta.textContent = metaConFecha(`ventana móvil ${avisos.ventana_dias} días`, verifData.updated);
+  wrap.hidden = false;
 }
 
 const ARCHIVE_START = new Date('2026-06-09T22:00:00Z');
