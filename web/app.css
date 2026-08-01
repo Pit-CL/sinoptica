@@ -1002,6 +1002,25 @@ dialog::backdrop {
   .verif-row { grid-template-columns: 22px 1fr auto; grid-template-areas: "rank name mae" "rank bar bar" "rank bias bias"; }
 }
 
+/* Subsección de avisos propios (POD/FAR/CSI) dentro del mismo panel de
+   verificación — cabecera más liviana que panel-head (es h3, no h2) */
+.verif-avisos { margin-top: 18px; }
+
+.verif-avisos-head {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+}
+
+.verif-avisos-head h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.verif-avisos-table td:nth-child(2), .verif-avisos-table th:nth-child(2) { text-align: right; }
+.verif-avisos-table tr.muestra-insuficiente { opacity: 0.6; }
+
 /* ── Mapa de observaciones ───────────────────────────────────── */
 
 #map {
