@@ -978,6 +978,26 @@ dialog::backdrop {
   color: var(--ink-soft);
 }
 
+/* Skill vs. persistencia: compacto junto al MAE, con signo */
+.verif-skill {
+  font: 600 0.68rem var(--font-mono);
+  color: var(--ink-soft);
+  margin-left: 4px;
+}
+
+.verif-skill.is-neg { color: var(--accent); }
+
+/* Fila de persistencia: referencia, no un modelo — visualmente aparte */
+.verif-row--ref {
+  opacity: 0.7;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+
+.verif-row--ref .verif-rank { color: var(--ink-soft); }
+.verif-row--ref .verif-bar { background-color: var(--ink-soft); }
+
 @media (max-width: 560px) {
   .verif-row { grid-template-columns: 22px 1fr auto; grid-template-areas: "rank name mae" "rank bar bar" "rank bias bias"; }
 }

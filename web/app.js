@@ -208,6 +208,7 @@ const INFO = {
 <p><strong>MAE (error absoluto medio):</strong> el tamaño típico del error, en grados. «MAE 1,5 °C a 1 día» significa que, en promedio, la temperatura pronosticada para el día siguiente difirió 1,5 °C de la observada. Mientras más chico, mejor.</p>
 <p><strong>Sesgo:</strong> el error <em>con signo</em>. Un sesgo de +1 °C significa que el modelo tiende a pronosticar más calor del que llega; −1 °C, más frío. Conocer el sesgo de cada modelo en cada lugar es la base para corregirlo — exactamente lo que hará nuestro modelo de calibración local.</p>
 <p><strong>Los plazos:</strong> «a 1 día» evalúa pronósticos emitidos 24 h antes; «a 4 días», 96 h antes. El error crece con el plazo — eso también lo puedes ver aquí, transparente.</p>
+<p><strong>Persistencia (referencia):</strong> el pronóstico más simple que existe — asumir que el clima sigue igual a como estaba hace tantas horas como el plazo evaluado. No es un modelo, es la vara mínima: cualquier modelo serio debería superarla. El porcentaje junto al MAE de cada modelo (ej. «+34%») es su <em>skill</em>: cuánto menor es su error frente al de la persistencia en ese mismo plazo — positivo, le gana; negativo, pierde contra la comparación más ingenua posible.</p>
 <p class="info-fine">Ventana móvil: últimos 14 días, todas las estaciones, todas las horas. El número «n» son los pares pronóstico-observación evaluados: con n chico las cifras bailan; con miles, se estabilizan. Este archivo partió el 9 de junio de 2026 y mejora solo con cada hora que pasa.</p>`,
   },
   riesgos: {
@@ -1146,6 +1147,12 @@ function renderVerif() {
   if (!verifData || !list) return;
   list.innerHTML = '';
 
+  // Persistencia: pseudo-modelo de referencia (ver info del panel). Puede
+  // faltar en el JSON (transición) o no tener datos aún para este plazo —
+  // en ambos casos el skill simplemente no se muestra, sin errores.
+  const pers = verifData.models?.persistencia?.['temperature_2m']?.[verifBucket];
+  const maePers = pers && pers.n > 0 ? pers.mae : null;
+
   const entries = MODELS.map((m, i) => {
     const b = verifData.models?.[m.id]?.['temperature_2m']?.[verifBucket];
     return b ? { ...m, ...b, colorIdx: i } : { ...m, mae: null, colorIdx: i };
@@ -1170,23 +1177,41 @@ function renderVerif() {
   }
 
   const colors = modelColors();
-  const maxMae = Math.max(...withData.map((e) => e.mae), 0.1);
+  const maxMae = Math.max(...withData.map((e) => e.mae), maePers ?? 0, 0.1);
   withData.forEach((e, rank) => {
     const li = document.createElement('li');
     li.className = 'verif-row';
     const biasTxt = Math.abs(e.bias) < 0.15 ? 'sin sesgo claro'
       : e.bias > 0 ? `tiende +${r1(e.bias)}° cálido` : `tiende ${r1(e.bias)}° frío`;
+    const skill = maePers ? Math.round((1 - e.mae / maePers) * 100) : null;
+    const skillTxt = skill == null ? '' : ` <span class="verif-skill ${skill >= 0 ? 'is-pos' : 'is-neg'}" ` +
+      `title="Skill sobre la persistencia (repetir la observación de hace ${verifBucket} h): ` +
+      `${skill >= 0 ? 'le gana por' : 'pierde por'} ${Math.abs(skill)}%.">${skill > 0 ? '+' : ''}${skill}%</span>`;
     li.innerHTML = `
       <span class="verif-rank">${rank === 0 ? '★' : rank + 1}</span>
       <span class="verif-name">${e.name}<small>${e.org}</small></span>
       <span class="verif-bar-wrap"><span class="verif-bar"></span></span>
-      <span class="verif-mae">${e.mae.toFixed(2)} °C</span>
+      <span class="verif-mae">${e.mae.toFixed(2)} °C${skillTxt}</span>
       <span class="verif-bias">${biasTxt} · n=${e.n}</span>`;
     const bar = li.querySelector('.verif-bar');
     bar.style.width = `${Math.max(6, (e.mae / maxMae) * 100)}%`;
     bar.style.backgroundColor = colors[e.colorIdx];
     list.appendChild(li);
   });
+
+  if (maePers != null) {
+    const li = document.createElement('li');
+    li.className = 'verif-row verif-row--ref';
+    li.innerHTML = `
+      <span class="verif-rank">≈</span>
+      <span class="verif-name">Persistencia<small>referencia, no un modelo</small></span>
+      <span class="verif-bar-wrap"><span class="verif-bar"></span></span>
+      <span class="verif-mae">${maePers.toFixed(2)} °C</span>
+      <span class="verif-bias">línea base: el clima de hace ${verifBucket} h · n=${pers.n}</span>`;
+    const bar = li.querySelector('.verif-bar');
+    bar.style.width = `${Math.max(6, (maePers / maxMae) * 100)}%`;
+    list.appendChild(li);
+  }
 }
 
 const ARCHIVE_START = new Date('2026-06-09T22:00:00Z');
