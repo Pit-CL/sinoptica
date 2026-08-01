@@ -264,6 +264,14 @@ let esvalData = null;    // cortes de agua Esval, V Región (best effort, vía s
 let combustibleData = null; // precios de combustible en línea (CNE), capa 'combustible', carga lazy propia; dormida sin CNE_API_KEY
 let biasData = null;     // correcciones de sesgo por estación/modelo/lead
 let biasStation = null;  // estación de calibración más cercana a `place` (o null)
+// Claves de capa cuyo último fetch falló y todavía no tienen ningún dato que
+// mostrar en su lugar: se llenan en el catch/HTTP-error de cada loader, se
+// limpian apenas ese mismo loader vuelve a traer datos. El reintento es el
+// ciclo de refresco que ya existe (refreshAll, ver "Refresco en vivo") — sin
+// timer ni botón propios. Honestidad de frescura (regla 8 de CLAUDE.md):
+// "sin eventos" y "no se pudo cargar" deben leerse distinto, nunca el mismo
+// silencio (ver textoVacio/notaFallo en "Utilidades").
+const cargasFallidas = new Set();
 let map = null;
 let tileLayer = null;
 // Capa satelital GOES-East: tileLayers persistentes fuera de layerGroups
@@ -406,6 +414,35 @@ function actualizadoTexto(updated, stale) {
 function metaConFecha(resumen, updated, stale) {
   const frag = actualizadoTexto(updated, stale);
   return frag ? `${resumen} · ${frag}` : resumen;
+}
+
+// Etiquetas legibles (sustantivo plural o frase corta, sin artículo) para el
+// mensaje de "no se pudo cargar" — una entrada por clave de `cargasFallidas`.
+const CAPA_LABEL = {
+  sismos: 'sismos', incendios: 'focos de calor', alertas: 'alertas SENAPRED',
+  volcanes: 'alerta volcánica', avisos: 'avisos meteorológicos', cortes: 'cortes de luz',
+  esval: 'cortes de agua', marea: 'marea y oleaje', remociones: 'catastro de remociones',
+  crecidas: 'pronóstico de crecidas', combustible: 'precios de combustible',
+  emergencia: 'infraestructura de emergencia', evacuacion: 'vías de evacuación',
+  farmacias: 'farmacias de turno',
+};
+
+function marcarFallo(capa) { cargasFallidas.add(capa); }
+function marcarOk(capa) { cargasFallidas.delete(capa); }
+
+// Mensaje corto y honesto para una o más capas cuyo JSON no cargó (regla 8:
+// nunca mostrar un panel vacío en silencio cuando en realidad falló la
+// carga, no es que no haya datos que mostrar).
+function notaFallo(capas) {
+  const lista = capas.map((c) => CAPA_LABEL[c] || c).join(', ');
+  return `No se pudieron cargar los datos de ${lista} — se reintentará solo.`;
+}
+
+// Texto para el estado "vacío" de una capa: si su último fetch falló, el
+// aviso honesto de notaFallo; si no, el mensaje normal (cargando/sin datos)
+// que ya usaba cada paintXxx. Reemplaza uno a uno esos literales.
+function textoVacio(capa, mensajeNormal) {
+  return cargasFallidas.has(capa) ? notaFallo([capa]) : mensajeNormal;
 }
 
 // "DD-MM" en hora de Chile a partir de un `updated` global — usado por
@@ -1227,80 +1264,104 @@ async function loadMapa() {
 async function loadSismos() {
   try {
     const res = await fetch('sismos.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     sismosData = await res.json();
-    if (capasActivas.has('sismos')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin catálogo sísmico: la capa queda vacía */ }
+    marcarOk('sismos');
+  } catch (_) {
+    marcarFallo('sismos'); /* sin catálogo sísmico: la capa queda vacía */
+  }
+  if (capasActivas.has('sismos')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadIncendios() {
   try {
     const res = await fetch('incendios.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     incendiosData = await res.json();
-    if (capasActivas.has('incendios')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin foco de calor: la capa queda vacía */ }
+    marcarOk('incendios');
+  } catch (_) {
+    marcarFallo('incendios'); /* sin foco de calor: la capa queda vacía */
+  }
+  if (capasActivas.has('incendios')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadAlertas() {
   try {
     const res = await fetch('alertas.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     alertasData = await res.json();
-    if (capasActivas.has('alertas')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin alertas: la capa queda vacía */ }
+    marcarOk('alertas');
+  } catch (_) {
+    marcarFallo('alertas'); /* sin alertas: la capa queda vacía */
+  }
+  if (capasActivas.has('alertas')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadVolcanes() {
   try {
     const res = await fetch('volcanes.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     volcanesData = await res.json();
-    if (capasActivas.has('volcanes')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin RNVV: la capa queda vacía */ }
+    marcarOk('volcanes');
+  } catch (_) {
+    marcarFallo('volcanes'); /* sin RNVV: la capa queda vacía */
+  }
+  if (capasActivas.has('volcanes')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadAvisos() {
   try {
     const res = await fetch('avisos.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     avisosData = await res.json();
-    if (capasActivas.has('avisos')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin avisos: la capa queda vacía */ }
+    marcarOk('avisos');
+  } catch (_) {
+    marcarFallo('avisos'); /* sin avisos: la capa queda vacía */
+  }
+  if (capasActivas.has('avisos')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadCortes() {
   try {
     const res = await fetch('cortes.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     cortesData = await res.json();
-    if (capasActivas.has('cortes')) renderMapa();
-    renderRiesgos();
-  } catch (_) { /* sin cortes: la capa queda vacía */ }
+    marcarOk('cortes');
+  } catch (_) {
+    marcarFallo('cortes'); /* sin cortes: la capa queda vacía */
+  }
+  if (capasActivas.has('cortes')) renderMapa();
+  renderRiesgos();
 }
 
 async function loadEsval() {
   try {
     const res = await fetch('esval.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     esvalData = await res.json();
-    if (capasActivas.has('esval')) renderMapa();
-  } catch (_) { /* sin esval: la capa queda vacía */ }
+    marcarOk('esval');
+  } catch (_) {
+    marcarFallo('esval'); /* sin esval: la capa queda vacía */
+  }
+  if (capasActivas.has('esval')) renderMapa();
 }
 
 async function loadMarea() {
   try {
     const res = await fetch('marea.json', { cache: 'no-store' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     mareaData = await res.json();
-    if (capasActivas.has('marea')) renderMapa();
-    renderCosta();
-  } catch (_) { /* sin marea: la capa y la tarjeta Costa quedan sin datos */ }
+    marcarOk('marea');
+  } catch (_) {
+    marcarFallo('marea'); /* sin marea: la capa y la tarjeta Costa quedan sin datos */
+  }
+  if (capasActivas.has('marea')) renderMapa();
+  renderCosta();
 }
 
 async function loadTsunami() {
@@ -1325,6 +1386,7 @@ async function loadFarmacias() {
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)
     .then((farm) => {
+      if (farm) marcarOk('farmacias'); else marcarFallo('farmacias');
       const lista = (farm && Array.isArray(farm.farmacias))
         ? farm.farmacias
           .filter((f) => typeof f.lat === 'number' && typeof f.lon === 'number')
@@ -1372,7 +1434,7 @@ async function loadEmergencia() {
     loadFarmacias(),
   ]);
   const [emg, vias, areas, farm] = await emergenciaPromise;
-  if (emg) emergenciaData = emg;
+  if (emg) { emergenciaData = emg; marcarOk('emergencia'); } else marcarFallo('emergencia');
   if (farm && farm.lista.length) {
     if (!emergenciaData) emergenciaData = { categorias: {} };
     if (!emergenciaData.categorias) emergenciaData.categorias = {};
@@ -1382,6 +1444,7 @@ async function loadEmergencia() {
   }
   tsunamiViasData = vias;
   tsunamiAreasData = areas;
+  if (vias || areas) marcarOk('evacuacion'); else marcarFallo('evacuacion');
   emergenciaPromise = null;
   const activa = capasActivas.has('emergencia') || capasActivas.has('evacuacion');
   // Los 3 fetch fallaron (sin red y sin DATA_CACHE previa, ver warmupEvacuacion
@@ -1403,8 +1466,12 @@ async function loadRemociones() {
   remocionesCargando = true;
   try {
     const res = await fetch('remociones.json', { cache: 'no-store' });
-    if (res.ok) remocionesData = await res.json();
-  } catch (_) { /* sin catastro: la capa queda vacía */ }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    remocionesData = await res.json();
+    marcarOk('remociones');
+  } catch (_) {
+    marcarFallo('remociones'); /* sin catastro: la capa queda vacía */
+  }
   remocionesCargando = false;
   if (capasActivas.has('remociones')) renderMapa();
 }
@@ -1419,8 +1486,12 @@ async function loadCrecidas() {
   crecidasCargando = true;
   try {
     const res = await fetch('crecidas.json', { cache: 'no-store' });
-    if (res.ok) crecidasData = await res.json();
-  } catch (_) { /* sin pronóstico: la capa queda vacía */ }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    crecidasData = await res.json();
+    marcarOk('crecidas');
+  } catch (_) {
+    marcarFallo('crecidas'); /* sin pronóstico: la capa queda vacía */
+  }
   crecidasCargando = false;
   if (capasActivas.has('crecidas')) renderMapa();
   renderRiesgos();
@@ -1436,8 +1507,12 @@ async function loadCombustible() {
   combustibleCargando = true;
   try {
     const res = await fetch('combustible.json', { cache: 'no-store' });
-    if (res.ok) combustibleData = await res.json();
-  } catch (_) { /* sin combustible: la capa queda vacía */ }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    combustibleData = await res.json();
+    marcarOk('combustible');
+  } catch (_) {
+    marcarFallo('combustible'); /* sin combustible: la capa queda vacía */
+  }
   combustibleCargando = false;
   if (capasActivas.has('combustible')) renderMapa();
 }
@@ -2035,7 +2110,7 @@ function colorSismo(edadMs) {
 
 function paintSismos(group) {
   const eventos = (sismosData && sismosData.eventos) || [];
-  if (!eventos.length) { $('#map-meta').textContent = 'sin datos sísmicos'; return; }
+  if (!eventos.length) { $('#map-meta').textContent = textoVacio('sismos', 'sin datos sísmicos'); return; }
   const ahora = Date.now();
   const replicas = sismosData.replicas;
   // El JSON viene del más reciente al más antiguo; pintamos al revés para
@@ -2094,7 +2169,7 @@ function paintIncendios(group) {
   if (!focos.length) {
     // Solo pisa #map-meta si incendios es la única capa activa: si hay otra
     // capa pintada antes o después en ORDEN_PINTADO, su texto debe prevalecer.
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'sin focos activos';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('incendios', 'sin focos activos');
     return;
   }
   // Grupos con menos focos primero: los grupos grandes quedan pintados
@@ -2270,7 +2345,7 @@ function piePopupAlertas(box, nivel) {
 // al comportamiento anterior (un pin en su punto medio).
 function paintAlertas(group) {
   const todas = (alertasData && alertasData.alertas) || [];
-  if (!todas.length) { $('#map-meta').textContent = 'sin alertas vigentes'; return; }
+  if (!todas.length) { $('#map-meta').textContent = textoVacio('alertas', 'sin alertas vigentes'); return; }
 
   const indice = comunasData
     ? new Map(comunasData.comunas.map((c) => [norm(c.n), c]))
@@ -2337,7 +2412,7 @@ function paintVolcanes(group) {
   const sufijoParcial = parcial ? ' · fuente parcial (solo alerta elevada)' : '';
   if (!volcanes.length) {
     if (capasActivas.size === 1) {
-      $('#map-meta').textContent = parcial ? `0 volcanes con alerta${sufijoParcial}` : 'sin datos RNVV';
+      $('#map-meta').textContent = parcial ? `0 volcanes con alerta${sufijoParcial}` : textoVacio('volcanes', 'sin datos RNVV');
     }
     return;
   }
@@ -2373,7 +2448,7 @@ const AVISO_NIVEL_LABEL = { amarillo: 'Amarillo', naranja: 'Naranja', rojo: 'Roj
 
 function paintAvisos(group) {
   const avisos = (avisosData && avisosData.avisos) || [];
-  if (!avisos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = 'sin avisos meteo'; return; }
+  if (!avisos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('avisos', 'sin avisos meteo'); return; }
   avisos.forEach((a) => {
     const icon = L.divIcon({
       className: 'stn-icon',
@@ -2425,7 +2500,7 @@ function paintAvisos(group) {
 
 function paintMarea(group) {
   const puntos = (mareaData && mareaData.puntos) || [];
-  if (!puntos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = 'sin datos de marea'; return; }
+  if (!puntos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('marea', 'sin datos de marea'); return; }
   puntos.forEach((p) => {
     const cls = p.tendencia === 'bajando' ? 'marea-baja' : 'marea-sube';
     const flecha = p.tendencia === 'bajando' ? '▼' : p.tendencia === 'subiendo' ? '▲' : '—';
@@ -2542,7 +2617,7 @@ function pintarGrupoEmg(grupo, group, emojiGrupo, etiqueta) {
 
 function paintEmergencia(group) {
   if (!emergenciaData) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'cargando infraestructura de emergencia…';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('emergencia', 'cargando infraestructura de emergencia…');
     return;
   }
   const categorias = emergenciaData.categorias || {};
@@ -2556,7 +2631,7 @@ function paintEmergencia(group) {
       todos.push({ ...it, cat, emoji, fecha: cat === 'farmacia' ? emergenciaData.farmaciaFecha : undefined });
     }
   }
-  if (!todos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = 'sin datos de emergencia'; return; }
+  if (!todos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('emergencia', 'sin datos de emergencia'); return; }
   // ~9.000 puntos en todo el país: pintarlos todos satura el DOM (9.292
   // divIcons medidos a zoom 13 en Valparaíso). Se filtra primero al
   // viewport actual (con margen, para no recortar en el borde) y recién
@@ -2586,11 +2661,11 @@ function paintEmergencia(group) {
 // paintEmergencia, no acá.
 function paintFarmacias(group) {
   if (!farmaciasData) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'cargando farmacias de turno…';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('farmacias', 'cargando farmacias de turno…');
     return;
   }
   const todos = farmaciasData.lista.map((it) => ({ ...it, cat: 'farmacia', emoji: '💊', fecha: farmaciasData.fecha }));
-  if (!todos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = 'sin farmacias de turno reportadas'; return; }
+  if (!todos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('farmacias', 'sin farmacias de turno reportadas'); return; }
   const boundsPuntos = map.getBounds().pad(0.3);
   const visibles = todos.filter((it) => boundsPuntos.contains([it.lat, it.lon]));
   // Umbral de pin individual más bajo que 'emergencia' (zoom 11 en vez de
@@ -2621,7 +2696,7 @@ function geomBounds(geom) {
 // encontraba mezcladas con los ~9.000 puntos de infraestructura.
 function paintEvacuacion(group) {
   if (!tsunamiViasData && !tsunamiAreasData) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'cargando vías de evacuación…';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('evacuacion', 'cargando vías de evacuación…');
     return;
   }
   // Área de evacuación ante tsunami: solo con el mapa acercado (zoom ≥ 12) y
@@ -2703,7 +2778,7 @@ const REM_CLASE = {
 function paintRemociones(group) {
   const puntos = (remocionesData && remocionesData.puntos) || [];
   if (!puntos.length) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'cargando catastro de remociones…';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('remociones', 'cargando catastro de remociones…');
     return;
   }
   const zoom = map.getZoom();
@@ -2771,7 +2846,7 @@ function diaSerie(updated, i) {
 function paintCrecidas(group) {
   const puntos = (crecidasData && crecidasData.puntos) || [];
   if (!puntos.length) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'cargando pronóstico de crecidas…';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('crecidas', 'cargando pronóstico de crecidas…');
     return;
   }
   puntos.forEach((p) => {
@@ -2823,7 +2898,7 @@ function paintCrecidas(group) {
 function paintCortes(group) {
   const cortes = (cortesData && cortesData.cortes) || [];
   if (!cortes.length) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'sin cortes de luz reportados';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('cortes', 'sin cortes de luz reportados');
     return;
   }
   const color = css('--alerta-amarilla');
@@ -2879,7 +2954,7 @@ function paintEsval(group) {
   const zonas = (esvalData && esvalData.zonas) || [];
   if (!zonas.length) {
     if (capasActivas.size === 1) {
-      $('#map-meta').textContent = metaConFecha('Sin cortes de agua informados · Esval (V Región)', esvalData && esvalData.updated, esvalData && esvalData.stale);
+      $('#map-meta').textContent = textoVacio('esval', metaConFecha('Sin cortes de agua informados · Esval (V Región)', esvalData && esvalData.updated, esvalData && esvalData.stale));
     }
     return;
   }
@@ -2997,7 +3072,7 @@ function popupEstacionCombustible(e) {
 function paintCombustible(group) {
   const estaciones = (combustibleData && combustibleData.estaciones) || [];
   if (!estaciones.length) {
-    if (capasActivas.size === 1) $('#map-meta').textContent = 'combustible: capa en preparación (sin datos todavía)';
+    if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('combustible', 'combustible: capa en preparación (sin datos todavía)');
     return;
   }
   const bounds = map.getBounds().pad(0.3);
@@ -3552,8 +3627,27 @@ function renderRiesgos() {
   // llegue — cargarComunas() vuelve a llamar renderRiesgos() al terminar.
   if (riesgoAmbito === 'cerca' && !comunasData) cargarComunas();
   const hayAlgo = !!(sismosData || incendiosData || alertasData || volcanesData || avisosData || cortesData || crecidasData);
-  panel.hidden = !hayAlgo;
-  if (!hayAlgo) { $('#risk-badge').hidden = true; return; }
+  // Fuentes de este panel que fallaron y siguen sin dato: si TODAS fallan el
+  // panel no puede quedar oculto en silencio (antes: panel.hidden ocultaba
+  // por igual "sin eventos" y "no cargó nada"), y si solo ALGUNAS fallan se
+  // avisa en la meta junto a las que sí llegaron.
+  const RIESGO_CAPAS = ['sismos', 'incendios', 'alertas', 'volcanes', 'avisos', 'cortes', 'crecidas'];
+  const fallidas = RIESGO_CAPAS.filter((c) => cargasFallidas.has(c));
+  panel.hidden = !hayAlgo && !fallidas.length;
+  if (!hayAlgo) {
+    $('#risk-badge').hidden = true;
+    if (fallidas.length) {
+      panel.querySelectorAll('.riesgo-tile[data-capa]').forEach((b) => { b.hidden = true; });
+      $('#riesgos-meta').textContent = '';
+      const ol = $('#riesgo-eventos');
+      ol.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'riesgo-vacio';
+      li.textContent = notaFallo(fallidas);
+      ol.appendChild(li);
+    }
+    return;
+  }
 
   panel.querySelector('[data-capa="sismos"]').hidden = !sismosData;
   panel.querySelector('[data-capa="incendios"]').hidden = !incendiosData;
@@ -3563,10 +3657,11 @@ function renderRiesgos() {
   panel.querySelector('[data-capa="crecidas"]').hidden = !crecidasData;
   panel.querySelector('[data-capa="cortes"]').hidden = !cortesData;
 
+  const metaFallidas = fallidas.length ? ` · no se pudieron cargar: ${fallidas.map((c) => CAPA_LABEL[c] || c).join(', ')}` : '';
   $('#riesgos-meta').textContent = [
     ['CSN', sismosData], ['SENAPRED', alertasData], ['SERNAGEOMIN', volcanesData], ['NASA FIRMS', incendiosData],
     ['Vigía (no oficial)', avisosData], ['SEC (best effort)', cortesData], ['GloFAS (no oficial)', crecidasData],
-  ].filter(([, ok]) => ok).map(([nombre]) => nombre).join(' · ');
+  ].filter(([, ok]) => ok).map(([nombre]) => nombre).join(' · ') + metaFallidas;
 
   renderRiesgoTiles(riesgoCounts());
   renderRiesgoEventos();
