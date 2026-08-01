@@ -1874,6 +1874,42 @@ function popupRows(pairs) {
   return dl;
 }
 
+// Caja base de un popup de marcador: el <div class="stn-popup"> con su título
+// en <strong>, que repetían idénticas casi todas las capas. El título es
+// opcional porque las alertas sin comuna arman su encabezado aparte.
+function cajaPopup(titulo) {
+  const box = document.createElement('div');
+  box.className = 'stn-popup';
+  if (titulo != null) {
+    const h = document.createElement('strong');
+    h.textContent = titulo;
+    box.appendChild(h);
+  }
+  return box;
+}
+
+// Factory común de los marcadores del mapa. Cada capa de puntos repetía el
+// mismo bloque —divIcon con la clase que define su aspecto según el tema →
+// L.marker centrado en el punto → bindPopup → addTo del layerGroup— y esa
+// duplicación ya costó una familia de bugs: los marcadores que quedaban
+// invisibles en modo oscuro hubo que arreglarlos capa por capa (PR #158).
+// Centralizado, el próximo arreglo de esa familia se hace una sola vez.
+// El ancla del ícono SIEMPRE fue su centro, así que se deriva de `tam` en vez
+// de repetirla en cada capa (y de arriesgar que alguna la escriba mal).
+// `popup` es opcional: las vistas agrupadas no lo usan porque cuelgan su
+// propio handler de clic sobre el marcador que este factory devuelve.
+function pintarMarcador(group, { lat, lon, clase, html = '', tam, titulo, popup, maxWidth = 260, maxHeight }) {
+  const [ancho, alto] = tam;
+  const icon = L.divIcon({
+    className: clase,
+    html,
+    iconSize: [ancho, alto], iconAnchor: [ancho / 2, alto / 2],
+  });
+  const marker = L.marker([lat, lon], { icon, title: titulo }).addTo(group);
+  if (popup) marker.bindPopup(popup, { maxWidth, maxHeight });
+  return marker;
+}
+
 // true si el dispositivo abre Apple Maps nativo (iPhone/iPad/Mac). iPadOS
 // se reporta como "MacIntel" en navigator.platform igual que un Mac de
 // escritorio, pero da lo mismo: ambos tienen Apple Maps instalado.
@@ -1989,15 +2025,7 @@ function paintTemp(group) {
     : todas;
   est.forEach((e) => {
     const t = e.obs.temperature_2m;
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="stn-label ${tempClass(t)}">${Math.round(t)}°</span>`,
-      iconSize: [44, 26], iconAnchor: [22, 13],
-    });
-    const marker = L.marker([e.lat, e.lon], { icon, title: e.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = e.nombre; box.appendChild(h);
+    const box = cajaPopup(e.nombre);
     const meta = document.createElement('small');
     meta.textContent = `${e.fuente === 'metar' ? 'Aeropuerto · red OMM' : 'EMA · Dirección Meteorológica de Chile'} · ${horaLocal(e.obs_time)} h`;
     box.appendChild(meta);
@@ -2006,7 +2034,11 @@ function paintTemp(group) {
         : [label, key === 'wind_direction_10m'
             ? `${Math.round(e.obs[key])}° (${compass(e.obs[key])})`
             : `${r1(e.obs[key])} ${unit}`])));
-    marker.bindPopup(box, { maxWidth: 280 });
+    pintarMarcador(group, {
+      lat: e.lat, lon: e.lon, clase: 'stn-icon',
+      html: `<span class="stn-label ${tempClass(t)}">${Math.round(t)}°</span>`,
+      tam: [44, 26], titulo: e.nombre, popup: box, maxWidth: 280,
+    });
   });
   const resumen = est.length < todas.length ? `${est.length} de ${todas.length} estaciones` : `${est.length} estaciones`;
   const acerca = est.length < todas.length ? ' (acerca el mapa para ver más)' : '';
@@ -2023,15 +2055,7 @@ function paintAire(group) {
     : todas;
   est.forEach((e) => {
     const nivel = icapNivel(e.icap);
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="stn-label ${nivel.cls}">${e.icap}</span>`,
-      iconSize: [40, 26], iconAnchor: [20, 13],
-    });
-    const marker = L.marker([e.lat, e.lon], { icon, title: e.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = e.nombre; box.appendChild(h);
+    const box = cajaPopup(e.nombre);
     const meta = document.createElement('small');
     meta.textContent = `${e.comuna || ''} · SINCA · ICAP ${e.icap} (${nivel.n})`;
     box.appendChild(meta);
@@ -2039,7 +2063,11 @@ function paintAire(group) {
       ['MP2,5', e.pm2_5 != null ? `${Math.round(e.pm2_5)} µg/m³` : null],
       ['MP10', e.pm10 != null ? `${Math.round(e.pm10)} µg/m³` : null],
     ]));
-    marker.bindPopup(box, { maxWidth: 260 });
+    pintarMarcador(group, {
+      lat: e.lat, lon: e.lon, clase: 'stn-icon',
+      html: `<span class="stn-label ${nivel.cls}">${e.icap}</span>`,
+      tam: [40, 26], titulo: e.nombre, popup: box,
+    });
   });
   const resumen = est.length < todas.length ? `${est.length} de ${todas.length} estaciones SINCA` : `${est.length} estaciones SINCA`;
   const acerca = est.length < todas.length ? ' (acerca el mapa para ver más)' : '';
@@ -2077,15 +2105,7 @@ function paintPrecip(group) {
     const nieve = a.nieve_48h != null && a.nieve_48h >= 1;
     const cls = precipClass(a.lluvia_48h, a.nieve_48h);
     const label = nieve ? `❄ ${fmtAcum(a.nieve_48h)} cm` : `${fmtAcum(a.lluvia_48h)} mm`;
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="stn-label ${cls}">${label}</span>`,
-      iconSize: [50, 26], iconAnchor: [25, 13],
-    });
-    const marker = L.marker([a.lat, a.lon], { icon, title: a.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = a.nombre; box.appendChild(h);
+    const box = cajaPopup(a.nombre);
     box.appendChild(popupRows([
       ['Lluvia 24 h', `${r1(a.lluvia_24h)} mm`],
       ['Lluvia 48 h', `${r1(a.lluvia_48h)} mm`],
@@ -2095,7 +2115,11 @@ function paintPrecip(group) {
     const small = document.createElement('small');
     small.textContent = (avisosData && avisosData.fuente) || 'Derivado del pronóstico multi-modelo';
     box.appendChild(small);
-    marker.bindPopup(box, { maxWidth: 280 });
+    pintarMarcador(group, {
+      lat: a.lat, lon: a.lon, clase: 'stn-icon',
+      html: `<span class="stn-label ${cls}">${label}</span>`,
+      tam: [50, 26], titulo: a.nombre, popup: box, maxWidth: 280,
+    });
   });
   const resumen = est.length < todas.length ? `${est.length} de ${todas.length} estaciones` : `${est.length} estaciones`;
   const acerca = est.length < todas.length ? ' (acerca el mapa para ver más)' : '';
@@ -2133,24 +2157,7 @@ function paintViento(group) {
     const rumbo = (dir + 180) % 360;
     const vTxt = v == null ? '—' : Math.round(v);
     const rafagaTxt = sevRafaga ? ` · raf ${Math.round(g)}` : '';
-    const icon = L.divIcon({
-      className: 'viento-icon',
-      html: `<span class="viento-flecha">➤</span><span class="stn-label viento-${sev}">${vTxt} km/h${rafagaTxt}</span>`,
-      // Ancho holgado para "NNN km/h · raf NNN" (peor caso: sostenido Y ráfaga
-      // de 3 dígitos, ej. 150 km/h · raf 300) — medido con Playwright para el
-      // caso de 2 dígitos ("33 km/h · raf 98" → 146px de label), + margen para
-      // el caso de 3 dígitos: flecha 14px + gap 3px + label mono 0.82rem.
-      iconSize: [190, 24], iconAnchor: [95, 12],
-    });
-    const marker = L.marker([e.lat, e.lon], { icon, title: e.nombre }).addTo(group);
-    // Rotación por CSSOM tras crear el marcador: la CSP (style-src 'self')
-    // bloquea el atributo style inline (mismo patrón que .foco-flecha).
-    const el = marker.getElement();
-    const flecha = el && el.querySelector('.viento-flecha');
-    if (flecha) flecha.style.transform = `rotate(${rumbo - 90}deg)`;
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = e.nombre; box.appendChild(h);
+    const box = cajaPopup(e.nombre);
     box.appendChild(popupRows([
       ['Viento', v == null ? null : `${Math.round(v)} km/h · Bf ${beaufort(v).grado} (${beaufort(v).nombre})`],
       // Sin grado Beaufort: la escala es solo para viento sostenido, no ráfagas.
@@ -2158,7 +2165,20 @@ function paintViento(group) {
       ['Dirección', `desde el ${compass(dir)}`],
       ['Hora obs.', e.obs_time ? `${horaLocal(e.obs_time)} h` : null],
     ]));
-    marker.bindPopup(box, { maxWidth: 260 });
+    const marker = pintarMarcador(group, {
+      lat: e.lat, lon: e.lon, clase: 'viento-icon',
+      html: `<span class="viento-flecha">➤</span><span class="stn-label viento-${sev}">${vTxt} km/h${rafagaTxt}</span>`,
+      // Ancho holgado para "NNN km/h · raf NNN" (peor caso: sostenido Y ráfaga
+      // de 3 dígitos, ej. 150 km/h · raf 300) — medido con Playwright para el
+      // caso de 2 dígitos ("33 km/h · raf 98" → 146px de label), + margen para
+      // el caso de 3 dígitos: flecha 14px + gap 3px + label mono 0.82rem.
+      tam: [190, 24], titulo: e.nombre, popup: box,
+    });
+    // Rotación por CSSOM tras crear el marcador: la CSP (style-src 'self')
+    // bloquea el atributo style inline (mismo patrón que .foco-flecha).
+    const el = marker.getElement();
+    const flecha = el && el.querySelector('.viento-flecha');
+    if (flecha) flecha.style.transform = `rotate(${rumbo - 90}deg)`;
   });
   const resumen = est.length === 1 ? '1 estación' : `${est.length} estaciones`;
   $('#map-meta').textContent = estacionesData.updated
@@ -2264,20 +2284,7 @@ function paintIncendios(group) {
       // Sin atributo style inline: la CSP (style-src 'self') lo bloquea. La
       // rotación se aplica por CSSOM tras crear el marcador.
       const flecha = avance != null ? '<span class="foco-flecha">➤</span>' : '';
-      const icon = L.divIcon({
-        className: `foco foco-${f.conf || 'n'}`,
-        html: flecha,
-        iconSize: [10, 10], iconAnchor: [5, 5],
-      });
-      const marker = L.marker([f.lat, f.lon], { icon }).addTo(group);
-      if (avance != null) {
-        const el = marker.getElement();
-        const span = el && el.querySelector('.foco-flecha');
-        if (span) span.style.transform = `rotate(${avance - 90}deg)`;
-      }
-      const box = document.createElement('div');
-      box.className = 'stn-popup';
-      const h = document.createElement('strong'); h.textContent = 'Foco de calor'; box.appendChild(h);
+      const box = cajaPopup('Foco de calor');
       box.appendChild(popupRows([
         ['FRP', f.frp != null ? `${f.frp} MW` : null],
         ['Confianza', CONF_LABEL[f.conf] || f.conf],
@@ -2302,23 +2309,24 @@ function paintIncendios(group) {
           'foco puede diferir. Ante fuego cercano evacúa temprano, no esperes confirmación.';
         box.appendChild(nota);
       }
-      marker.bindPopup(box, { maxWidth: 260 });
+      const marker = pintarMarcador(group, {
+        lat: f.lat, lon: f.lon, clase: `foco foco-${f.conf || 'n'}`,
+        html: flecha, tam: [10, 10], popup: box,
+      });
+      if (avance != null) {
+        const el = marker.getElement();
+        const span = el && el.querySelector('.foco-flecha');
+        if (span) span.style.transform = `rotate(${avance - 90}deg)`;
+      }
     } else {
       const lat = grupo.reduce((s, f) => s + f.lat, 0) / grupo.length;
       const lon = grupo.reduce((s, f) => s + f.lon, 0) / grupo.length;
-      const icon = L.divIcon({
-        className: 'stn-icon',
+      const marker = pintarMarcador(group, {
+        lat, lon, clase: 'stn-icon',
         html: `<span class="stn-label foco-grupo">🔥<b>${grupo.length}</b></span>`,
-        iconSize: [40, 26], iconAnchor: [20, 13],
+        tam: [40, 26], titulo: `${grupo.length} focos de calor — toca para ver`,
       });
-      const marker = L.marker([lat, lon], {
-        icon, title: `${grupo.length} focos de calor — toca para ver`,
-      }).addTo(group);
-      const box = document.createElement('div');
-      box.className = 'stn-popup';
-      const h = document.createElement('strong');
-      h.textContent = `${grupo.length} focos de calor`;
-      box.appendChild(h);
+      const box = cajaPopup(`${grupo.length} focos de calor`);
       const ul = document.createElement('ul');
       ul.className = 'grupo-lista';
       const MAX_LISTA = 12;
@@ -2446,32 +2454,25 @@ function paintAlertas(group) {
 
   grupos.forEach(({ centroide, alertas }) => {
     const peor = [...alertas].sort((x, y) => (SEVERIDAD_ALERTA[y.nivel] || 0) - (SEVERIDAD_ALERTA[x.nivel] || 0))[0];
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="alerta alerta-${peor.nivel}">${emojiEvento(peor.evento)}</span>`,
-      iconSize: [38, 38], iconAnchor: [19, 19],
-    });
-    const marker = L.marker([centroide.lat, centroide.lon], { icon, title: centroide.n }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = centroide.n; box.appendChild(h);
+    const box = cajaPopup(centroide.n);
     alertas.forEach((a) => alertaPopup(box, a));
     piePopupAlertas(box, peor.nivel);
-    marker.bindPopup(box, { maxWidth: 300, maxHeight: 300 });
+    pintarMarcador(group, {
+      lat: centroide.lat, lon: centroide.lon, clase: 'stn-icon',
+      html: `<span class="alerta alerta-${peor.nivel}">${emojiEvento(peor.evento)}</span>`,
+      tam: [38, 38], titulo: centroide.n, popup: box, maxWidth: 300, maxHeight: 300,
+    });
   });
 
   sinComuna.forEach((a) => {
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="alerta alerta-${a.nivel}">${emojiEvento(a.evento)}</span>`,
-      iconSize: [38, 38], iconAnchor: [19, 19],
-    });
-    const marker = L.marker([a.lat, a.lon], { icon, title: a.evento }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
+    const box = cajaPopup();
     alertaPopup(box, a, { conRegion: true });
     piePopupAlertas(box, a.nivel);
-    marker.bindPopup(box, { maxWidth: 300, maxHeight: 300 });
+    pintarMarcador(group, {
+      lat: a.lat, lon: a.lon, clase: 'stn-icon',
+      html: `<span class="alerta alerta-${a.nivel}">${emojiEvento(a.evento)}</span>`,
+      tam: [38, 38], titulo: a.evento, popup: box, maxWidth: 300, maxHeight: 300,
+    });
   });
 
   const sufijoParcialAlertas = alertasData.parcial ? ' · datos posiblemente desactualizados' : '';
@@ -2496,21 +2497,17 @@ function paintVolcanes(group) {
   const TAMANO = { verde: 12, amarilla: 16, naranja: 18, roja: 20 };
   volcanes.forEach((v) => {
     const size = TAMANO[v.nivel] || 12;
-    const icon = L.divIcon({
-      className: 'volcan-icon',
-      html: `<span class="volcan vol-${v.nivel}"></span>`,
-      iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-    });
-    const marker = L.marker([v.lat, v.lon], { icon, title: v.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = v.nombre; box.appendChild(h);
+    const box = cajaPopup(v.nombre);
     box.appendChild(popupRows([
       ['Alerta técnica', v.nivel],
       ['Región', v.region],
       ['Peligrosidad geológica', v.peligrosidad],
     ]));
-    marker.bindPopup(box, { maxWidth: 260 });
+    pintarMarcador(group, {
+      lat: v.lat, lon: v.lon, clase: 'volcan-icon',
+      html: `<span class="volcan vol-${v.nivel}"></span>`,
+      tam: [size, size], titulo: v.nombre, popup: box,
+    });
   });
   $('#map-meta').textContent = volcanesData.updated
     ? `${volcanes.length} volcanes · ${horaLocal(volcanesData.updated.replace(' UTC', 'Z').replace(' ', 'T'))} h${sufijoParcial}`
@@ -2527,17 +2524,7 @@ function paintAvisos(group) {
   const avisos = (avisosData && avisosData.avisos) || [];
   if (!avisos.length) { if (capasActivas.size === 1) $('#map-meta').textContent = textoVacio('avisos', 'sin avisos meteo'); return; }
   avisos.forEach((a) => {
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="alerta aviso-${a.nivel}">${AVISO_EMOJI[a.tipo] || '⚠️'}</span>`,
-      iconSize: [38, 38], iconAnchor: [19, 19],
-    });
-    const marker = L.marker([a.lat, a.lon], { icon, title: a.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong');
-    h.textContent = `${AVISO_TIPO_LABEL[a.tipo] || a.tipo} · ${a.nombre}`;
-    box.appendChild(h);
+    const box = cajaPopup(`${AVISO_TIPO_LABEL[a.tipo] || a.tipo} · ${a.nombre}`);
     const filas = [
       ['Nivel', AVISO_NIVEL_LABEL[a.nivel] || a.nivel],
       ['Valor peak', `${r1(a.valor)} ${a.unidad}`],
@@ -2565,7 +2552,11 @@ function paintAvisos(group) {
     const small = document.createElement('small');
     small.textContent = (avisosData && avisosData.nota) || 'Aviso derivado de modelos, no es un aviso oficial de la DMC';
     box.appendChild(small);
-    marker.bindPopup(box, { maxWidth: 280 });
+    pintarMarcador(group, {
+      lat: a.lat, lon: a.lon, clase: 'stn-icon',
+      html: `<span class="alerta aviso-${a.nivel}">${AVISO_EMOJI[a.tipo] || '⚠️'}</span>`,
+      tam: [38, 38], titulo: a.nombre, popup: box, maxWidth: 280,
+    });
   });
   const vencido = avisosData.stale ? ` · pronóstico base de hace ${avisosData.pronostico_horas}h` : '';
   $('#map-meta').textContent = avisosData.updated
@@ -2582,15 +2573,7 @@ function paintMarea(group) {
     const cls = p.tendencia === 'bajando' ? 'marea-baja' : 'marea-sube';
     const flecha = p.tendencia === 'bajando' ? '▼' : p.tendencia === 'subiendo' ? '▲' : '—';
     const anillo = p.marejada ? ` marejada-${p.marejada.nivel}` : '';
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="stn-label ${cls}${anillo}">${flecha}</span>`,
-      iconSize: [30, 26], iconAnchor: [15, 13],
-    });
-    const marker = L.marker([p.lat, p.lon], { icon, title: p.nombre }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong'); h.textContent = p.nombre; box.appendChild(h);
+    const box = cajaPopup(p.nombre);
     const meta = document.createElement('small');
     meta.textContent = `Marea ${r1(p.nivel)} m (${p.tendencia || 'estable'})`;
     box.appendChild(meta);
@@ -2608,7 +2591,11 @@ function paintMarea(group) {
     const small = document.createElement('small');
     small.textContent = (mareaData && mareaData.nota) || '';
     box.appendChild(small);
-    marker.bindPopup(box, { maxWidth: 280 });
+    pintarMarcador(group, {
+      lat: p.lat, lon: p.lon, clase: 'stn-icon',
+      html: `<span class="stn-label ${cls}${anillo}">${flecha}</span>`,
+      tam: [30, 26], titulo: p.nombre, popup: box, maxWidth: 280,
+    });
   });
   $('#map-meta').textContent = mareaData.updated
     ? `${puntos.length} puntos costeros · marea de modelo (no oficial) · ${horaLocal(mareaData.updated.replace(' UTC', 'Z').replace(' ', 'T'))} h`
@@ -2621,15 +2608,7 @@ const EMG_EMOJI = { salud: '🏥', bomberos: '🚒', carabineros: '🚓', farmac
 // compartido por paintEmergencia y paintFarmacias para no duplicar el
 // marcador ni el popup entre ambas capas.
 function pintarPuntoEmg(it, group) {
-  const icon = L.divIcon({
-    className: 'stn-icon',
-    html: `<span class="emg">${it.emoji}</span>`,
-    iconSize: [26, 26], iconAnchor: [13, 13],
-  });
-  const marker = L.marker([it.lat, it.lon], { icon, title: it.n }).addTo(group);
-  const box = document.createElement('div');
-  box.className = 'stn-popup';
-  const h = document.createElement('strong'); h.textContent = it.n; box.appendChild(h);
+  const box = cajaPopup(it.n);
   if (it.d) { const small = document.createElement('small'); small.textContent = it.d; box.appendChild(small); }
   if (it.h) { const smallH = document.createElement('small'); smallH.textContent = `Horario: ${it.h}`; box.appendChild(smallH); }
   if (it.cat === 'farmacia' && it.fecha) {
@@ -2645,7 +2624,11 @@ function pintarPuntoEmg(it, group) {
     box.appendChild(a);
   }
   box.appendChild(enlaceComoLlegar(it.lat, it.lon));
-  marker.bindPopup(box, { maxWidth: 260 });
+  pintarMarcador(group, {
+    lat: it.lat, lon: it.lon, clase: 'stn-icon',
+    html: `<span class="emg">${it.emoji}</span>`,
+    tam: [26, 26], titulo: it.n, popup: box,
+  });
 }
 
 // Grupo de N puntos en la misma celda: mismo patrón que pintarPuntoEmg pero
@@ -2654,19 +2637,12 @@ function pintarPuntoEmg(it, group) {
 function pintarGrupoEmg(grupo, group, emojiGrupo, etiqueta) {
   const lat = grupo.reduce((s, it) => s + it.lat, 0) / grupo.length;
   const lon = grupo.reduce((s, it) => s + it.lon, 0) / grupo.length;
-  const icon = L.divIcon({
-    className: 'stn-icon',
+  const marker = pintarMarcador(group, {
+    lat, lon, clase: 'stn-icon',
     html: `<span class="stn-label emg-grupo">${emojiGrupo}<b>${grupo.length}</b></span>`,
-    iconSize: [40, 26], iconAnchor: [20, 13],
+    tam: [40, 26], titulo: `${grupo.length} ${etiqueta} — toca para ver`,
   });
-  const marker = L.marker([lat, lon], {
-    icon, title: `${grupo.length} ${etiqueta} — toca para ver`,
-  }).addTo(group);
-  const box = document.createElement('div');
-  box.className = 'stn-popup';
-  const h = document.createElement('strong');
-  h.textContent = `${grupo.length} en este punto`;
-  box.appendChild(h);
+  const box = cajaPopup(`${grupo.length} en este punto`);
   const ul = document.createElement('ul');
   ul.className = 'grupo-lista';
   const MAX_LISTA = 12;
@@ -2866,30 +2842,24 @@ function paintRemociones(group) {
     grupos.forEach((grupo) => {
       const lat = grupo.reduce((s, p) => s + p.lat, 0) / grupo.length;
       const lon = grupo.reduce((s, p) => s + p.lon, 0) / grupo.length;
-      const icon = L.divIcon({
-        className: 'stn-icon',
+      const marker = pintarMarcador(group, {
+        lat, lon, clase: 'stn-icon',
         html: `<span class="stn-label rem-grupo">⛰️<b>${grupo.length}</b></span>`,
-        iconSize: [40, 26], iconAnchor: [20, 13],
+        tam: [40, 26], titulo: `${grupo.length} remociones registradas — toca para acercar`,
       });
-      const marker = L.marker([lat, lon], {
-        icon, title: `${grupo.length} remociones registradas — toca para acercar`,
-      }).addTo(group);
       marker.on('click', () => map.setView([lat, lon], zoom + 2));
     });
   } else {
     puntos.forEach((p) => {
       const clase = REM_CLASE[p.t] || 'rem-desliza';
-      const icon = L.divIcon({ className: `rem-icon ${clase}`, iconSize: [12, 12], iconAnchor: [6, 6] });
-      const marker = L.marker([p.lat, p.lon], { icon, title: p.t }).addTo(group);
-      const box = document.createElement('div');
-      box.className = 'stn-popup';
-      const h = document.createElement('strong');
-      h.textContent = `${p.t} — remoción en masa registrada`;
-      box.appendChild(h);
+      const box = cajaPopup(`${p.t} — remoción en masa registrada`);
       const small = document.createElement('small');
       small.textContent = 'Si vives cerca: ante lluvia intensa aléjate de quebradas y laderas';
       box.appendChild(small);
-      marker.bindPopup(box, { maxWidth: 260 });
+      pintarMarcador(group, {
+        lat: p.lat, lon: p.lon, clase: `rem-icon ${clase}`,
+        tam: [12, 12], titulo: p.t, popup: box,
+      });
       // Zona de influencia aproximada: solo con el mapa bien acercado, igual
       // que el criterio de zoom de paintEvacuacion para no saturar el mapa.
       if (zoom >= 12) {
@@ -2928,17 +2898,7 @@ function paintCrecidas(group) {
   }
   puntos.forEach((p) => {
     const clase = p.nivel ? `creci-${p.nivel}` : 'creci-normal';
-    const icon = L.divIcon({
-      className: 'stn-icon',
-      html: `<span class="alerta ${clase}">🌊</span>`,
-      iconSize: [38, 38], iconAnchor: [19, 19],
-    });
-    const marker = L.marker([p.lat, p.lon], { icon, title: `${p.rio} — ${p.comuna}` }).addTo(group);
-    const box = document.createElement('div');
-    box.className = 'stn-popup';
-    const h = document.createElement('strong');
-    h.textContent = `${p.rio} — ${p.comuna}`;
-    box.appendChild(h);
+    const box = cajaPopup(`${p.rio} — ${p.comuna}`);
 
     const serieMax = p.caudal_max.some((v) => v != null) ? p.caudal_max : p.caudal;
     const peak = serieMax.filter((v) => v != null).reduce((m, v) => (m == null || v > m ? v : m), null);
@@ -2962,7 +2922,11 @@ function paintCrecidas(group) {
     const small = document.createElement('small');
     small.textContent = crecidasData.nota || 'Pronóstico de referencia GloFAS, no oficial';
     box.appendChild(small);
-    marker.bindPopup(box, { maxWidth: 280 });
+    pintarMarcador(group, {
+      lat: p.lat, lon: p.lon, clase: 'stn-icon',
+      html: `<span class="alerta ${clase}">🌊</span>`,
+      tam: [38, 38], titulo: `${p.rio} — ${p.comuna}`, popup: box, maxWidth: 280,
+    });
   });
 
   const conNivel = puntos.filter((p) => p.nivel).length;
@@ -3103,9 +3067,7 @@ const PRECIO_ANTIGUO_DIAS = 14;
 // con una sola estación (zoom 9-12), para no duplicar esta lógica.
 function popupEstacionCombustible(e) {
   const nombre = e.nombre || e.marca || 'Estación de servicio';
-  const box = document.createElement('div');
-  box.className = 'stn-popup';
-  const h = document.createElement('strong'); h.textContent = nombre; box.appendChild(h);
+  const box = cajaPopup(nombre);
   if (e.comuna) {
     const small = document.createElement('small');
     small.textContent = e.marca && e.nombre ? `${e.marca} · ${e.comuna}` : e.comuna;
@@ -3160,14 +3122,11 @@ function paintCombustible(group) {
     grupos.forEach((grupo) => {
       const lat = grupo.reduce((s, p) => s + p.lat, 0) / grupo.length;
       const lon = grupo.reduce((s, p) => s + p.lon, 0) / grupo.length;
-      const icon = L.divIcon({
-        className: 'stn-icon',
+      const marker = pintarMarcador(group, {
+        lat, lon, clase: 'stn-icon',
         html: `<span class="stn-label combustible-precio">⛽<b>${grupo.length}</b></span>`,
-        iconSize: [44, 26], iconAnchor: [22, 13],
+        tam: [44, 26], titulo: `${grupo.length} estaciones de servicio — toca para acercar`,
       });
-      const marker = L.marker([lat, lon], {
-        icon, title: `${grupo.length} estaciones de servicio — toca para acercar`,
-      }).addTo(group);
       marker.on('click', () => map.setView([lat, lon], zoom + 2));
     });
   } else if (zoom <= 12) {
@@ -3180,23 +3139,15 @@ function paintCombustible(group) {
         .filter((v) => v != null);
       const masBarato = precios93.length ? Math.min(...precios93) : null;
       const label = masBarato != null ? Math.round(masBarato) : '⛽';
-      const icon = L.divIcon({
-        className: 'stn-icon',
-        html: `<span class="stn-label combustible-precio">${label}${grupo.length > 1 ? ` <b>×${grupo.length}</b>` : ''}</span>`,
-        iconSize: [56, 26], iconAnchor: [28, 13],
-      });
-      const titulo = grupo.length > 1
+      const esGrupo = grupo.length > 1;
+      const titulo = esGrupo
         ? `${grupo.length} estaciones — 93 desde ${masBarato != null ? formatoClp(masBarato) : '—'}`
         : (grupo[0].nombre || grupo[0].marca || 'Estación de servicio');
-      const marker = L.marker([lat, lon], { icon, title: titulo }).addTo(group);
-      if (grupo.length === 1) {
-        marker.bindPopup(popupEstacionCombustible(grupo[0]), { maxWidth: 260 });
+      let box;
+      if (!esGrupo) {
+        box = popupEstacionCombustible(grupo[0]);
       } else {
-        const box = document.createElement('div');
-        box.className = 'stn-popup';
-        const h = document.createElement('strong');
-        h.textContent = `${grupo.length} estaciones en esta zona`;
-        box.appendChild(h);
+        box = cajaPopup(`${grupo.length} estaciones en esta zona`);
         const ordenado = [...grupo].sort((a, b) => {
           const pa = precioValor(a.precios && a.precios.gasolina_93);
           const pb = precioValor(b.precios && b.precios.gasolina_93);
@@ -3208,20 +3159,22 @@ function paintCombustible(group) {
           const p = precioValor(e.precios && e.precios.gasolina_93);
           return [e.nombre || e.marca || 'Estación', p != null ? formatoClp(p) : '—'];
         })));
-        marker.bindPopup(box, { maxWidth: 280 });
       }
+      pintarMarcador(group, {
+        lat, lon, clase: 'stn-icon',
+        html: `<span class="stn-label combustible-precio">${label}${esGrupo ? ` <b>×${grupo.length}</b>` : ''}</span>`,
+        tam: [56, 26], titulo, popup: box, maxWidth: esGrupo ? 280 : 260,
+      });
     });
   } else {
     visibles.forEach((e) => {
       const precio93 = precioValor(e.precios && e.precios.gasolina_93);
-      const icon = L.divIcon({
-        className: 'stn-icon',
+      pintarMarcador(group, {
+        lat: e.lat, lon: e.lon, clase: 'stn-icon',
         html: `<span class="stn-label combustible-precio">${precio93 != null ? Math.round(precio93) : '⛽'}</span>`,
-        iconSize: [44, 26], iconAnchor: [22, 13],
+        tam: [44, 26], titulo: e.nombre || e.marca || 'Estación de servicio',
+        popup: popupEstacionCombustible(e),
       });
-      const nombre = e.nombre || e.marca || 'Estación de servicio';
-      const marker = L.marker([e.lat, e.lon], { icon, title: nombre }).addTo(group);
-      marker.bindPopup(popupEstacionCombustible(e), { maxWidth: 260 });
     });
   }
   $('#map-meta').textContent = metaConFecha(`${estaciones.length} estaciones con precios · CNE Bencina en Línea`, combustibleData.updated);
