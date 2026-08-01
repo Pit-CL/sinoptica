@@ -32,27 +32,15 @@ que llegue, marcado `"parcial"` con una nota. El registro histórico
 (`raw_payloads`) siempre guarda el ciclo tal cual llegó, degradado o no —
 la guarda solo afecta lo publicado en `cortes.json`.
 
-Aviso a Slack SOLO cuando la retención se agota (ajuste 2026-07-24): el
-aviso original también sonaba al EMPEZAR a retener, pero los colapsos
-rutinarios de la SEC a las HH:15 (ver más arriba) gatillan varios episodios
-por día y la propia guarda los resuelve sola al ciclo siguiente — no hay
-acción posible del operador, así que ese aviso era puro ruido. El inicio de
-la retención queda solo en el log de ingesta (`print`); Slack avisa
-únicamente cuando la degradación persiste más de RETENCION_MAX_MIN y se
-publican datos posiblemente incompletos, que sí es accionable. Reusa el
-mismo webhook y patrón que ingesta/watchdog.py._post_slack (contenedor
-`ingesta`, mismo env SLACK_WEBHOOK_URL, ver docker-compose.yml); dormido sin
-webhook configurado, nunca propaga la URL en un error. El aviso de
-retención agotada no se repite por ciclo mientras la degradación persiste
-(ver comentario junto a su llamada). Un fallo del POST a Slack nunca debe
-impedir que se publique/retenga cortes.json — _post_slack atrapa cualquier
-excepción y su resultado se ignora en el flujo principal.
+El aviso a Slack cuando la retención se agota (agregado 2026-07-24) se
+retiró 2026-08-01 a pedido del operador: mientras el sitio publique lo más
+correcto posible basta, no hace falta notificación. Tanto el inicio de la
+retención como su vencimiento quedan solo en el log de ingesta (`print`,
+ver los dos `print("[aviso] ...")` en `update()`). La guarda de
+plausibilidad en sí — qué se publica en cortes.json — no cambió.
 """
 import json
-import sys
 import unicodedata
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -179,32 +167,6 @@ def _retenido_vencido(previo: dict) -> bool:
     return datetime.now(timezone.utc) - actualizado > timedelta(minutes=RETENCION_MAX_MIN)
 
 
-def _post_slack(texto: str) -> bool:
-    """POST {"text": ...} al webhook del operador. Mismo patrón que
-    ingesta/watchdog.py._post_slack (duplicado a propósito: sin módulo
-    compartido entre pasos de la ingesta). Nunca propaga la URL del webhook
-    en un error — urllib la incluye en sus excepciones."""
-    body = json.dumps({"text": texto}).encode("utf-8")
-    try:
-        # Request() también puede lanzar (ej. ValueError si SLACK_WEBHOOK_URL
-        # queda mal configurada sin esquema): construirla DENTRO del try es a
-        # propósito — afuera, esa excepción escaparía sin atrapar y podría
-        # filtrar la URL completa del webhook vía str(err) en el log de
-        # ingesta (regla dura #7), además de impedir la publicación/retención
-        # de cortes.json (el write ocurre después de este llamado).
-        req = urllib.request.Request(
-            config.SLACK_WEBHOOK_URL, data=body, method="POST",
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as res:
-            return 200 <= res.status < 300
-    except urllib.error.HTTPError as err:
-        print(f"[error] slack: HTTP {err.code}", file=sys.stderr)
-        return False
-    except Exception:
-        print("[error] slack: error de red", file=sys.stderr)
-        return False
-
-
 def update(con, fetched_at: str) -> int:
     crudo = _incoming_fresco()
     if crudo is None:
@@ -267,16 +229,10 @@ def update(con, fetched_at: str) -> int:
         # nunca se congela un dato viejo indefinidamente.
         hora_ultimo_bueno = (previo.get("updated") or "").split(" ")[-2] if previo else "?"
         print(f"[aviso] ciclo SEC degradado sostenido (retención agotada tras {RETENCION_MAX_MIN} min): publicando datos posiblemente incompletos")
-        # Un solo aviso: esta rama solo se alcanza en el ciclo exacto donde
+        # Un solo log: esta rama solo se alcanza en el ciclo exacto donde
         # vence la retención — el próximo ciclo compara contra este mismo
         # n_comunas (bajo), que ya no supera UMBRAL_COMUNAS_PLAUSIBLE, así
-        # que _es_degradado da False de inmediato y no se repite sola.
-        if config.SLACK_WEBHOOK_URL:
-            _post_slack(
-                f":warning: *Vigía* — SEC sigue degradado tras {RETENCION_MAX_MIN} min "
-                f"reteniendo el último ciclo completo. Publicando datos posiblemente "
-                f"incompletos desde {hora_ultimo_bueno} UTC ({len(cortes)} comunas)."
-            )
+        # que _es_degradado da False de inmediato y no se repite solo.
         payload["parcial"] = True
         payload["nota"] = f"Fuente SEC entregando datos posiblemente incompletos desde {hora_ultimo_bueno} UTC."
     config.CORTES_PATH.parent.mkdir(parents=True, exist_ok=True)
