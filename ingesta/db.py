@@ -67,6 +67,14 @@ CREATE INDEX IF NOT EXISTS idx_forecasts_lookup
   ON forecasts(station, variable, valid_time);
 CREATE INDEX IF NOT EXISTS idx_observations_lookup
   ON observations(station, variable, obs_time);
+-- Filtro principal de ingesta/verify.py (member=-1, variable IN(...),
+-- valid_time>=ventana): sin este índice el planner conduce el JOIN desde
+-- `forecasts` con un SCAN completo (medido: >100M filas, minutos de CPU
+-- en producción con la retención de 60 días llena) en vez de acotar por
+-- rango — idx_forecasts_lookup no sirve para este filtro porque su columna
+-- líder (station) no está en el WHERE.
+CREATE INDEX IF NOT EXISTS idx_forecasts_verif
+  ON forecasts(member, variable, valid_time);
 
 -- Umbrales de crecida por punto de río (ver ingesta/crecidas.py), calculados
 -- una sola vez desde el reanálisis histórico GloFAS (bootstrap). Tabla propia:
