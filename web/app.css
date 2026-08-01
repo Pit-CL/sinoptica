@@ -164,6 +164,18 @@ body {
 
 a { color: var(--accent2); text-underline-offset: 2px; }
 
+/* Foco de teclado: solo :focus-visible (nunca por mouse). Cubre todos los
+   <button>/<a>/inputs, incluidos los que ya tienen su propio color de hover
+   (ese color se conserva; esta regla solo agrega el anillo). */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
+}
+
 /* ── Masthead ───────────────────────────────────────────────── */
 
 .masthead {
@@ -221,7 +233,6 @@ a { color: var(--accent2); text-underline-offset: 2px; }
 .risk-badge:hover, .risk-badge:focus-visible {
   background: var(--alerta-roja);
   color: var(--bg-panel);
-  outline: none;
 }
 
 .theme-btn {
@@ -241,7 +252,6 @@ a { color: var(--accent2); text-underline-offset: 2px; }
 
 .theme-btn:hover, .theme-btn:focus-visible {
   border-color: var(--ink);
-  outline: none;
 }
 
 /* ── Ubicación: búsqueda + chips ────────────────────────────── */
@@ -865,7 +875,6 @@ dialog::backdrop {
   transform: translateY(-2px);
   border-color: var(--ink);
   box-shadow: var(--shadow-1);
-  outline: none;
 }
 
 /* ── Verificación ────────────────────────────────────────────── */
@@ -1222,13 +1231,31 @@ dialog::backdrop {
 /* ── Refinamientos para celulares ────────────────────────────── */
 
 /* Área táctil de 44px en botones chicos sin agrandar lo visual
-   (recomendación WCAG / Apple HIG para objetivos tocables). */
-.info-btn, .dialog-close { position: relative; }
+   (recomendación WCAG / Apple HIG para objetivos tocables). Cada inset se
+   limita a la mitad del gap real con el vecino más próximo, para no
+   invadir su área táctil. */
+.info-btn, .dialog-close,
+.chip, .map-mode, .verif-tab, .rf-btn, .push-btn,
+.theme-btn, .risk-badge { position: relative; }
 .info-btn::after, .dialog-close::after {
   content: '';
   position: absolute;
   inset: -11px;
 }
+/* .chip (gap 8px) y .verif-tab (gap 8px): mitad del gap en los 4 lados. */
+.chip::after, .verif-tab::after { content: ''; position: absolute; inset: -4px; }
+/* .map-mode: dentro de .map-group el gap es 6px de fila / 8px de columna. */
+.map-mode::after { content: ''; position: absolute; inset: -3px -4px; }
+/* único botón de .satelite-control, sin vecino: llega a los 44px completos. */
+.satelite-control .map-mode::after { inset: -10px; }
+/* .rf-btn: fila de .riesgo-filtro con gap de 6px. */
+.rf-btn::after { content: ''; position: absolute; inset: -3px; }
+/* .push-btn: fila de .riesgo-acciones con gap de 8px. */
+.push-btn::after { content: ''; position: absolute; inset: -4px; }
+/* .theme-btn: botón aislado en el masthead, sin vecino cercano. */
+.theme-btn::after { content: ''; position: absolute; inset: -7px; }
+/* .risk-badge: ancho ya generoso por el texto; solo falta alto. */
+.risk-badge::after { content: ''; position: absolute; inset: -9px 0; }
 
 @media (max-width: 560px) {
   .masthead { padding-top: 16px; }
@@ -1850,7 +1877,6 @@ p.marejada-fuerte { color: var(--alerta-roja); }
 .riesgo-tile:hover, .riesgo-tile:focus-visible {
   border-color: var(--ink);
   transform: translateY(-1px);
-  outline: none;
 }
 
 .rt-emoji { font-size: 1.1rem; }
@@ -1901,7 +1927,7 @@ p.marejada-fuerte { color: var(--alerta-roja); }
   cursor: pointer;
 }
 
-.riesgo-item:hover, .riesgo-item:focus-visible { color: var(--accent); outline: none; }
+.riesgo-item:hover, .riesgo-item:focus-visible { color: var(--accent); }
 
 .riesgo-item .ri-text {
   flex: 1 1 auto;
