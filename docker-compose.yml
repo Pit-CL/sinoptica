@@ -57,8 +57,6 @@ services:
       CNE_EMAIL: ${CNE_EMAIL:-}
       CNE_PASSWORD: ${CNE_PASSWORD:-}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
-      CF_ANALYTICS_TOKEN: ${CF_ANALYTICS_TOKEN:-}
-      CF_ZONE_ID: ${CF_ZONE_ID:-}
     volumes:
       - ./ingesta:/app/ingesta:ro
       - ./deploy/crontab:/crontab-src:ro

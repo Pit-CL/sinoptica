@@ -16,8 +16,8 @@ Uso:
 Variables de entorno (vía /opt/vigia/.env):
     GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN — si falta
     cualquiera, el script no hace nada y sale con éxito (patrón "dormido",
-    igual que combustible.py/analytics_diario.py): la copia offsite es un
-    plus, no puede tumbar el backup local si aún no está configurada.
+    igual que combustible.py): la copia offsite es un plus, no puede tumbar
+    el backup local si aún no está configurada.
     SLACK_WEBHOOK_URL — opcional, aviso si la subida falla.
 
 El access_token SIEMPRE va en el header Authorization, nunca en la URL, y

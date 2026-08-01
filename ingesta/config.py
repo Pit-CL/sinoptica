@@ -135,8 +135,3 @@ COMUNAS_PATH = ROOT / "web" / "comunas.json"  # catastro INE versionado, no lo g
 # CLIMA_WATCHDOG_STATE, junto a los demás datos de /data en prod.
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 WATCHDOG_STATE_PATH = Path(os.environ.get("CLIMA_WATCHDOG_STATE", ROOT / "data" / "watchdog_state.json"))
-
-# ── Resumen diario de tráfico (Cloudflare Analytics, ver analytics_diario.py)
-# Patrón "dormido": sin token o zone id, el resumen no hace nada.
-CF_ANALYTICS_TOKEN = os.environ.get("CF_ANALYTICS_TOKEN", "")
-CF_ZONE_ID = os.environ.get("CF_ZONE_ID", "")
