@@ -75,6 +75,40 @@ CREATE INDEX IF NOT EXISTS idx_observations_lookup
 -- líder (station) no está en el WHERE.
 CREATE INDEX IF NOT EXISTS idx_forecasts_verif
   ON forecasts(member, variable, valid_time);
+-- Búsqueda de ensamble_stats.py: agrega por (model, run_tag, member>=0). Sin
+-- este índice el planner recurre a idx_forecasts_lookup con un SCAN completo
+-- de la tabla (medido: >30 min y sin terminar para un solo run_tag sobre
+-- ~18M filas de ensamble) porque ninguno de los índices existentes tiene
+-- run_tag — con este índice pasa a SEARCH (seek) y cada run_tag se resuelve
+-- en segundos.
+CREATE INDEX IF NOT EXISTS idx_forecasts_ens_run
+  ON forecasts(model, run_tag, member);
+
+-- Condensado PERMANENTE del ensamble ECMWF (config.ENSEMBLE_MODEL, 51
+-- miembros), ver ingesta/ensamble_stats.py. `forecasts` purga el ensamble a
+-- los 60 días (RETENTION_DAYS) y Open-Meteo no sirve miembros históricos: lo
+-- purgado es irrecuperable. Esta tabla NO entra en ninguna retención (no
+-- está en RETENTION_DAYS/prune): media/sd/percentiles se conservan para
+-- siempre, pensados para EMOS estacional futuro. n = miembros con valor no
+-- nulo agregados; frac01 = fracción de miembros > 0.1 mm, solo tiene sentido
+-- para variable='precipitation' (NULL en las demás). Si algún día se archiva
+-- otro ensamble, agregar columna `model` en vez de asumir ECMWF.
+CREATE TABLE IF NOT EXISTS ensamble_stats (
+  station    TEXT NOT NULL,
+  run_tag    TEXT NOT NULL,
+  valid_time TEXT NOT NULL,
+  variable   TEXT NOT NULL,
+  n          INTEGER NOT NULL,
+  media      REAL,
+  sd         REAL,
+  p10        REAL,
+  p50        REAL,
+  p90        REAL,
+  frac01     REAL,
+  UNIQUE(station, run_tag, valid_time, variable)
+);
+CREATE INDEX IF NOT EXISTS idx_ensamble_stats_lookup
+  ON ensamble_stats(station, variable, valid_time);
 
 -- Umbrales de crecida por punto de río (ver ingesta/crecidas.py), calculados
 -- una sola vez desde el reanálisis histórico GloFAS (bootstrap). Tabla propia:

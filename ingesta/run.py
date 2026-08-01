@@ -18,6 +18,7 @@ import cortes
 import crecidas
 import db
 import emergencia
+import ensamble_stats
 import esval
 import farmacias
 import incendios
@@ -177,6 +178,7 @@ def main() -> int:
     if do_forecasts:
         ok &= step(con, run_at, "openmeteo_det", lambda: sources.ingest_openmeteo_det(con, run_tag))
         ok &= step(con, run_at, "openmeteo_ens", lambda: sources.ingest_openmeteo_ens(con, run_tag))
+        ok &= step(con, run_at, "ensamble_stats", lambda: ensamble_stats.update(con))
         ok &= step(con, run_at, "prune", lambda: db.prune(con))
     if do_sismos:
         ok &= step(con, run_at, "sismos", lambda: sismos.update(con, run_at))
