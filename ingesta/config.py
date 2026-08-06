@@ -134,8 +134,13 @@ ESVAL_PATH = Path(os.environ.get("CLIMA_ESVAL", ROOT / "web" / "esval.json"))
 COMUNAS_PATH = ROOT / "web" / "comunas.json"  # catastro INE versionado, no lo genera la ingesta
 
 # ── Watchdog de frescura (aviso a Slack, ver watchdog.py) ───────
-# Patrón "dormido" (igual que combustible.py): sin webhook, el watchdog
-# no hace nada. El estado de transiciones (para no re-notificar) vive en
-# CLIMA_WATCHDOG_STATE, junto a los demás datos de /data en prod.
+# Patrón "dormido" (igual que combustible.py): sin bot token ni webhook, el
+# watchdog no hace nada. El estado de transiciones (para no re-notificar)
+# vive en CLIMA_WATCHDOG_STATE, junto a los demás datos de /data en prod.
+# SLACK_BOT_TOKEN (bot Heraldo, chat.postMessage) es el transporte actual;
+# SLACK_WEBHOOK_URL queda como fallback de transición mientras el bot no
+# esté invitado a todos los canales que lo necesiten.
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
 WATCHDOG_STATE_PATH = Path(os.environ.get("CLIMA_WATCHDOG_STATE", ROOT / "data" / "watchdog_state.json"))

@@ -27,13 +27,24 @@ FECHA="$(date +%Y%m%d)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-# Avisa por stdout y, si hay SLACK_WEBHOOK_URL en el .env de prod, también
-# por Slack (nunca imprime el webhook). Termina el script con exit 1.
+# Avisa por stdout y, si hay SLACK_BOT_TOKEN o SLACK_WEBHOOK_URL en el .env
+# de prod, también por Slack (nunca imprime el token ni el webhook). Bot
+# Heraldo (chat.postMessage) primero; si falla (ej. canal sin invitar) o no
+# hay token, reintenta por el webhook. Termina el script con exit 1.
 fail() {
     echo "ERROR: backup falló: $1"
     if [ -f "$ENV_PATH" ]; then
         set -a; . "$ENV_PATH"; set +a
-        if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
+        ENVIADO=""
+        if [ -n "${SLACK_BOT_TOKEN:-}" ]; then
+            RESP="$(curl -s --max-time 15 -X POST \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H 'Content-Type: application/json' \
+                -d "{\"channel\":\"${SLACK_CHANNEL_ID:-C0BH5SFQHFX}\",\"text\":\"🔴 Vigía: backup semanal falló: $1\"}" \
+                https://slack.com/api/chat.postMessage || true)"
+            case "$RESP" in *'"ok":true'*) ENVIADO=1 ;; esac
+        fi
+        if [ -z "$ENVIADO" ] && [ -n "${SLACK_WEBHOOK_URL:-}" ]; then
             curl -s -o /dev/null --max-time 15 -X POST \
                 -H 'Content-Type: application/json' \
                 -d "{\"text\":\"🔴 Vigía: backup semanal falló: $1\"}" \
