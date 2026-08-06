@@ -13,9 +13,12 @@ con umbral más bajo — ver `_cumple()`.
 
 Además del Web Push, en el mismo ciclo se procesa un suscriptor Slack
 multi-zona (SLACK_ZONAS, con fallback a la zona única legacy
-SLACK_ZONA_LAT/LON/REGION) — ver `_procesar_slack()`. Dormido si
-SLACK_WEBHOOK_URL no está configurado (mismo patrón que
-ingesta/watchdog.py, que usa el mismo webhook para otro fin).
+SLACK_ZONA_LAT/LON/REGION) — ver `_procesar_slack()`. Dormido si no hay
+SLACK_BOT_TOKEN ni SLACK_WEBHOOK_URL configurados (mismo patrón que
+ingesta/watchdog.py). Transporte: bot Heraldo (chat.postMessage) si hay
+token; si falla o no está configurado, reintenta por el webhook — estas son
+alertas de emergencia real y ninguna puede perderse por un token todavía
+sin invitar al canal.
 
 Eventos NACIONALES (tsunami, sismos M≥6.5/PAGER, volcanes, alertas rojas) se
 envían UNA vez a todo el canal (endpoint `slack:nacional`), sin importar
@@ -85,8 +88,11 @@ MAG_MIN_ZONA_PISO = 4.5
 
 # ── Suscriptor Slack (multi-zona) ───────────────────────────────
 # Todas con default vacío → funcionalidad dormida (mismo patrón que
-# ingesta/watchdog.py y combustible.py).
+# ingesta/watchdog.py y combustible.py). SLACK_BOT_TOKEN (bot Heraldo) es
+# el transporte actual; SLACK_WEBHOOK_URL queda como fallback de transición.
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
 SLACK_ZONA_REGION = os.environ.get("SLACK_ZONA_REGION", "")
 
 # ── Claim VAPID 'sub' (RFC 8292) ────────────────────────────────
@@ -289,10 +295,40 @@ def _rumbo(lat0: float, lon0: float, lat: float, lon: float) -> str:
 
 
 def _post_slack(texto: str) -> bool:
-    """POST {"text": ...} al webhook de Slack. Nunca propaga la URL en el
-    error (urllib la incluye en sus excepciones) — mismo patrón que
-    ingesta/watchdog.py._post_slack, duplicado aquí porque push/ e ingesta/
-    son contenedores separados sin módulo compartido."""
+    """Manda `texto` a Slack: bot Heraldo (chat.postMessage) si hay
+    SLACK_BOT_TOKEN; si falla (ej. canal sin invitar) o no hay token,
+    reintenta por el webhook como red de seguridad. Nunca propaga la
+    URL/token en el error (urllib los incluye en sus excepciones) — mismo
+    patrón que ingesta/watchdog.py._post_slack, duplicado aquí porque push/
+    e ingesta/ son contenedores separados sin módulo compartido."""
+    if SLACK_BOT_TOKEN and _post_slack_bot(texto):
+        return True
+    if SLACK_WEBHOOK_URL:
+        return _post_slack_webhook(texto)
+    return False
+
+
+def _post_slack_bot(texto: str) -> bool:
+    body = json.dumps({"channel": SLACK_CHANNEL_ID, "text": texto}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {SLACK_BOT_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read())
+            if not data.get("ok"):
+                print(f"[slack] bot error: {data.get('error', 'desconocido')}")
+            return bool(data.get("ok"))
+    except urllib.error.HTTPError as err:
+        print(f"[slack] bot error: HTTP {err.code}")
+        return False
+    except Exception:
+        print("[slack] bot error: error de red")
+        return False
+
+
+def _post_slack_webhook(texto: str) -> bool:
     body = json.dumps({"text": texto}).encode("utf-8")
     req = urllib.request.Request(
         SLACK_WEBHOOK_URL, data=body, method="POST",
@@ -301,10 +337,10 @@ def _post_slack(texto: str) -> bool:
         with urllib.request.urlopen(req, timeout=15) as res:
             return 200 <= res.status < 300
     except urllib.error.HTTPError as err:
-        print(f"[slack] error: HTTP {err.code}")
+        print(f"[slack] webhook error: HTTP {err.code}")
         return False
     except Exception:
-        print("[slack] error: error de red")
+        print("[slack] webhook error: error de red")
         return False
 
 
@@ -781,7 +817,7 @@ def _enviar_digest_zona(con: sqlite3.Connection, zona: dict, endpoint: str,
 def _procesar_slack(con: sqlite3.Connection, sismos_base: list[dict], ya_enviados: set[tuple[str, str]]) -> None:
     """Suscriptor Slack multi-zona: independiente de si hay suscripciones
     Web Push (no depende de la tabla `subs`)."""
-    if not SLACK_WEBHOOK_URL:
+    if not (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL):
         return
     zonas = _cargar_zonas()
     if not zonas:
@@ -1009,8 +1045,8 @@ def _cli() -> int:
     args = ap.parse_args()
 
     if args.test_zona:
-        if not SLACK_WEBHOOK_URL:
-            print("[slack] SLACK_WEBHOOK_URL no configurado, nada que probar")
+        if not (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL):
+            print("[slack] ni SLACK_BOT_TOKEN ni SLACK_WEBHOOK_URL configurados, nada que probar")
             return 1
         return 0 if _post_slack(MENSAJE_PRUEBA_ZONA) else 1
 

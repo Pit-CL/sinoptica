@@ -11,12 +11,17 @@ No es un paso de la ingesta (no fetchea nada externo ni escribe en la BD):
 es un monitor independiente, igual que push/send.py — se invoca directo
 desde cron, no se integra a run.py.
 
-Patrón "dormido" (igual que combustible.py): sin SLACK_WEBHOOK_URL, exit 0
-silencioso — no es un error, es que el operador no configuró avisos.
+Patrón "dormido" (igual que combustible.py): sin SLACK_BOT_TOKEN ni
+SLACK_WEBHOOK_URL, exit 0 silencioso — no es un error, es que el operador no
+configuró avisos.
 
-Nunca debe filtrar el webhook: urllib incluye la URL completa en sus
-excepciones, así que el manejo de errores solo reporta "HTTP <código>" o
-"error de red", jamás el error crudo (que trae la URL).
+Transporte: bot Heraldo (chat.postMessage) si hay SLACK_BOT_TOKEN; si falla
+o no está configurado, reintenta por el webhook — Vigía no puede quedar sin
+ruta de envío mientras el bot no esté invitado a todos los canales.
+
+Nunca debe filtrar el webhook ni el token: urllib incluye la URL completa
+en sus excepciones, así que el manejo de errores solo reporta "HTTP
+<código>" o "error de red", jamás el error crudo (que trae la URL/token).
 """
 import argparse
 import json
@@ -122,7 +127,38 @@ def _guardar_estado(estado: dict) -> None:
 
 
 def _post_slack(texto: str) -> bool:
-    """POST {"text": ...} al webhook. Nunca propaga la URL en el error."""
+    """Manda `texto` a Slack: bot Heraldo (chat.postMessage) si hay
+    SLACK_BOT_TOKEN; si falla (ej. canal sin invitar) o no hay token,
+    reintenta por el webhook como red de seguridad. Nunca propaga la
+    URL/token en el error."""
+    if config.SLACK_BOT_TOKEN and _post_slack_bot(texto):
+        return True
+    if config.SLACK_WEBHOOK_URL:
+        return _post_slack_webhook(texto)
+    return False
+
+
+def _post_slack_bot(texto: str) -> bool:
+    body = json.dumps({"channel": config.SLACK_CHANNEL_ID, "text": texto}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read())
+            if not data.get("ok"):
+                print(f"[error] slack bot: {data.get('error', 'desconocido')}", file=sys.stderr)
+            return bool(data.get("ok"))
+    except urllib.error.HTTPError as err:
+        print(f"[error] slack bot: HTTP {err.code}", file=sys.stderr)
+        return False
+    except Exception:
+        print("[error] slack bot: error de red", file=sys.stderr)
+        return False
+
+
+def _post_slack_webhook(texto: str) -> bool:
     body = json.dumps({"text": texto}).encode("utf-8")
     req = urllib.request.Request(
         config.SLACK_WEBHOOK_URL, data=body, method="POST",
@@ -131,10 +167,10 @@ def _post_slack(texto: str) -> bool:
         with urllib.request.urlopen(req, timeout=15) as res:
             return 200 <= res.status < 300
     except urllib.error.HTTPError as err:
-        print(f"[error] slack: HTTP {err.code}", file=sys.stderr)
+        print(f"[error] slack webhook: HTTP {err.code}", file=sys.stderr)
         return False
     except Exception:
-        print("[error] slack: error de red", file=sys.stderr)
+        print("[error] slack webhook: error de red", file=sys.stderr)
         return False
 
 
@@ -194,7 +230,7 @@ def main() -> int:
                      help="manda un único mensaje de prueba al webhook real y termina")
     args = ap.parse_args()
 
-    if not config.SLACK_WEBHOOK_URL:
+    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL):
         return 0
 
     if args.test:

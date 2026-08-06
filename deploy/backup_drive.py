@@ -18,7 +18,9 @@ Variables de entorno (vía /opt/vigia/.env):
     cualquiera, el script no hace nada y sale con éxito (patrón "dormido",
     igual que combustible.py): la copia offsite es un plus, no puede tumbar
     el backup local si aún no está configurada.
-    SLACK_WEBHOOK_URL — opcional, aviso si la subida falla.
+    SLACK_BOT_TOKEN, SLACK_CHANNEL_ID — opcional, aviso a Slack (bot
+    Heraldo) si la subida falla. SLACK_WEBHOOK_URL queda como fallback de
+    transición mientras el bot no esté invitado al canal.
 
 El access_token SIEMPRE va en el header Authorization, nunca en la URL, y
 los mensajes de error solo reportan el código HTTP — nunca el cuerpo crudo
@@ -40,6 +42,31 @@ KEEP_REMOTE = 8
 
 
 def _slack_alert(mensaje: str) -> None:
+    """Manda `mensaje` a Slack: bot Heraldo (chat.postMessage) si hay
+    SLACK_BOT_TOKEN; si falla (ej. canal sin invitar) o no hay token,
+    reintenta por el webhook. Todo best-effort, nunca tumba el script."""
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if token and _slack_alert_bot(mensaje, token):
+        return
+    _slack_alert_webhook(mensaje)
+
+
+def _slack_alert_bot(mensaje: str, token: str) -> bool:
+    channel = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
+    body = json.dumps({"channel": channel, "text": mensaje}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            data = json.loads(res.read())
+            return bool(data.get("ok"))
+    except Exception:
+        return False
+
+
+def _slack_alert_webhook(mensaje: str) -> None:
     webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
     if not webhook:
         return
