@@ -843,10 +843,69 @@ def _guardar_avisos_emitidos(con, run_ts: str, avisos: list, series_crudo_por_es
         )
 
 
+def _cargar_estado_avisos() -> dict:
+    try:
+        return json.loads(config.AVISOS_STATE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _guardar_estado_avisos(run_tag: str) -> None:
+    config.AVISOS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config.AVISOS_STATE_PATH.write_text(json.dumps({"run_tag": run_tag}, ensure_ascii=False) + "\n")
+
+
+def _purgar_vencidos(ahora: datetime) -> int | None:
+    """Refiltrado barato del avisos.json ya publicado, SIN tocar `forecasts`:
+    quita los avisos cuyo hora_peak ya pasó y refresca pronostico_horas/stale.
+    Usada por el early-exit de update() cuando el run_tag de pronóstico no
+    cambió — la ventana de vigencia (desde=ahora) sí avanza cada hora, así que
+    un skip total dejaría avisos vencidos publicados hasta 12 h (hasta la
+    próxima ingesta de pronóstico). No recalcula acumulados (dependen de toda
+    la serie horaria, no solo de qué avisos siguen vigentes) ni descubre
+    avisos nuevos que recién entren por el extremo lejano de la ventana; eso
+    espera al próximo run_tag. Devuelve el conteo de avisos vigentes, o None
+    si no hay avisos.json previo (fuerza el cálculo completo)."""
+    try:
+        payload = json.loads(config.AVISOS_PATH.read_text())
+    except Exception:
+        return None
+    corte = ahora.strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload["avisos"] = [a for a in payload.get("avisos", []) if a["hora_peak"] >= corte]
+    payload["updated"] = ahora.strftime("%Y-%m-%d %H:%M UTC")
+    pronostico_run = payload.get("pronostico_run")
+    if pronostico_run:
+        pronostico_horas = round((ahora - datetime.fromisoformat(pronostico_run + ":00")
+                                   .replace(tzinfo=timezone.utc)).total_seconds() / 3600)
+        payload["pronostico_horas"] = pronostico_horas
+        if pronostico_horas > STALE_HORAS:
+            payload["stale"] = True
+    config.AVISOS_PATH.write_text(json.dumps(payload, ensure_ascii=False) + "\n")
+    return len(payload["avisos"])
+
+
 def update(con, fetched_at: str) -> int:
     ahora = datetime.now(timezone.utc)
     desde = ahora.strftime("%Y-%m-%dT%H:%M")
     hasta = (ahora + timedelta(hours=VENTANA_H)).strftime("%Y-%m-%dT%H:%M")
+
+    # Early-exit: el pronóstico solo se ingesta 2x/día pero update() corre
+    # 24x/día (cada corrida horaria); si el run_tag no cambió desde la última
+    # corrida completa, evita las 152 consultas pesadas por estación (ver
+    # _purgar_vencidos para por qué no es un skip total). Se usa la primera
+    # estación como "canario" en vez de MAX(run_tag) global: todas las
+    # estaciones reciben el mismo run_tag en el mismo lote de ingesta
+    # (openmeteo_det/ens corren una sola vez por corrida de --forecasts para
+    # las 152 estaciones), y filtrar por station=? sí tiene índice — sin
+    # station, ningún índice cubre member como prefijo de run_tag y el
+    # planner cae a un scan completo (medido: minutos sobre 140M filas).
+    ultimo_run_tag = con.execute(
+        "SELECT MAX(run_tag) FROM forecasts WHERE station=? AND member=-1",
+        (config.STATIONS[0]["id"],)).fetchone()[0]
+    if ultimo_run_tag and ultimo_run_tag == _cargar_estado_avisos().get("run_tag"):
+        n = _purgar_vencidos(ahora)
+        if n is not None:
+            return n
 
     avisos = []
     acumulados = []
@@ -896,4 +955,6 @@ def update(con, fetched_at: str) -> int:
             payload["stale"] = True
     config.AVISOS_PATH.parent.mkdir(parents=True, exist_ok=True)
     config.AVISOS_PATH.write_text(json.dumps(payload, ensure_ascii=False) + "\n")
+    if ultimo_run_tag:
+        _guardar_estado_avisos(ultimo_run_tag)
     return len(avisos)
