@@ -50,6 +50,7 @@ services:
       CLIMA_COMBUSTIBLE: /data/combustible.json
       CLIMA_INCOMING: /data/incoming
       CLIMA_WATCHDOG_STATE: /data/watchdog_state.json
+      CLIMA_AVISOS_STATE: /data/avisos_state.json
       DMC_USUARIO: ${DMC_USUARIO:-}
       DMC_TOKEN: ${DMC_TOKEN:-}
       DMC_STATIONS: ${DMC_STATIONS:-}

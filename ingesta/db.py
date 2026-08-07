@@ -83,6 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_forecasts_verif
 -- en segundos.
 CREATE INDEX IF NOT EXISTS idx_forecasts_ens_run
   ON forecasts(model, run_tag, member);
+-- Consulta cara de avisos.py (_series_estacion y el early-exit de update()):
+-- station=? AND run_tag=? AND member=-1 AND variable IN(...) AND valid_time
+-- BETWEEN. Sin este índice, con sqlite_stat1 vacío o con estadísticas
+-- gruesas (ANALYZE con analysis_limit bajo, necesario en una tabla de
+-- cientos de millones de filas) el planner puede preferir idx_forecasts_verif
+-- y hacer SEARCH por member primero (medido en producción, 2026-08-07:
+-- 26,6-29,8s por estación, 15-21 min por corrida horaria de avisos con 152
+-- estaciones). Con este índice: SEARCH ... USING INDEX
+-- idx_forecasts_station_run, <0.15s por estación.
+CREATE INDEX IF NOT EXISTS idx_forecasts_station_run
+  ON forecasts(station, run_tag, member, variable, valid_time);
 
 -- Condensado PERMANENTE del ensamble ECMWF (config.ENSEMBLE_MODEL, 51
 -- miembros), ver ingesta/ensamble_stats.py. `forecasts` purga el ensamble a

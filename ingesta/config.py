@@ -144,3 +144,8 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
 WATCHDOG_STATE_PATH = Path(os.environ.get("CLIMA_WATCHDOG_STATE", ROOT / "data" / "watchdog_state.json"))
+
+# Estado del early-exit de avisos.py: último run_tag de pronóstico ya
+# procesado, para no recalcular las 152 estaciones si el pronóstico (2x/día)
+# no cambió desde la corrida horaria anterior (ver avisos.update()).
+AVISOS_STATE_PATH = Path(os.environ.get("CLIMA_AVISOS_STATE", ROOT / "data" / "avisos_state.json"))
