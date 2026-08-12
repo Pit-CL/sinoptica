@@ -3,6 +3,9 @@
 # con smoke test al final. Reemplaza el rsync manual documentado en docs/DEPLOY.md.
 #
 # Uso: bash deploy/deploy.sh [ref]   (ref por defecto: origin/main)
+#
+# Lo invoca a mano el usuario o, de madrugada, scripts/deploy-cron.sh (gate
+# 03:20 Chile) cuando origin/main avanzó desde el último deploy.
 set -e
 
 REF="${1:-origin/main}"
