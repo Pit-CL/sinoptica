@@ -25,6 +25,17 @@
 # El esqueleto común con los otros 3 crons (lock, gate horario, Slack,
 # recordatorio de PRs, marker) vive en ~/dotfiles/bin/lib/deploy-cron-common.sh.
 #
+# **Sin chequeo de integridad de BD** (`~/dotfiles/bin/lib/db-integrity-check.sh`),
+# a diferencia de erp-rollitos e iktus-erp: Vigía no tiene Postgres. Su estado
+# vive en SQLite dentro del bind mount de prod (`/opt/vigia/data/clima.db`,
+# `CLIMA_DB` del docker-compose), así que `db_snapshot`/`db_compare` —que hablan
+# psql contra un contenedor— no tienen dónde conectarse, y `db_backup_fresh` no
+# tiene rama para `clima`: caería en su `*)` fail-closed y bloquearía el deploy
+# para siempre. Lo que protege los datos acá es otra cosa: `deploy/deploy.sh`
+# excluye `data/` del rsync y el smoke test valida el resultado. Si algún día
+# Vigía migra a Postgres, hay que agregarle su rama a `db_backup_fresh` ANTES de
+# enchufarle el chequeo.
+#
 # Flags de test (NO usar en el crontab real):
 #   FORCE_HOUR=1  salta el gate horario (actúa sin importar la hora local)
 #   DRY_RUN=1     no ejecuta deploy/deploy.sh, no escribe el marker y no postea

@@ -171,6 +171,46 @@ caso ask 'X=1 rm -rf /opt/vigia'
 caso ask 'echo "hola" > /opt/vigia/web/index.html'
 caso ask 'sed -i "s/vigia/otro/" /opt/vigia/deploy/nginx.conf'
 
+# ---------------------------------------------------------------------------
+# 5. Destructivos globales: no nombran prod y antes salían con exit 0
+# ---------------------------------------------------------------------------
+# El hueco real: el guard solo evaluaba comandos que mencionaban rutas de prod,
+# así que un `rm -rf /` suelto pasaba sin decisión y con exit 0. Acá no hay
+# modo cron (el deploy no pasa por `claude -p`), así que el veredicto es `ask`
+# — que en una sesión headless se resuelve igual como denegación.
+echo "== 5. Destructivos globales (fuera del alcance de PROD_RE) =="
+
+caso ask 'rm -rf /'
+caso ask 'sudo rm -rf --no-preserve-root /'
+caso ask 'rm -rf /*'
+caso ask 'rm -fr ~'
+caso ask 'rm -rf ~/'
+caso ask 'rm -rf "$HOME"'
+caso ask 'rm -rf /home/rafael'
+caso ask 'rm -rf /etc'
+caso ask 'mkfs.ext4 /dev/sda1'
+caso ask 'dd if=/dev/zero of=/dev/sda bs=1M'
+caso ask 'cat /dev/zero > /dev/nvme0n1'
+caso ask 'echo x > /dev/sda'
+caso ask 'docker system prune -af'
+caso ask 'docker volume prune'
+caso ask 'docker volume rm clima-data'
+caso ask 'chmod -R 777 /'
+caso ask 'chown -R rafael:rafael /'
+caso ask ':(){ :|:& };:'
+caso ask 'sudo shutdown -h now'
+caso ask 'sudo systemctl reboot'
+caso ask 'sudo reboot'
+caso ask 'init 0'
+
+# Y lo que NO debe caer en la regla nueva (falsos positivos que la volverían
+# ruido): /dev/null no es un dispositivo de bloque, "reboot" como texto de
+# búsqueda no apaga nada, y un rm acotado del checkout de dev es rutina.
+caso allow 'dd if=/tmp/x.img of=/dev/null bs=1M count=1'
+caso allow 'grep -i reboot /var/log/syslog'
+caso allow 'rm -rf web/node_modules'
+caso allow 'docker image ls'
+
 echo
 if [ "$FALLOS" -gt 0 ]; then
   echo "Fallos en detalle:"
