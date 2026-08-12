@@ -40,11 +40,89 @@ fi
 # positivos. `deploy/deploy.sh` sí entra: es el camino normal a prod, y correrlo
 # a mano en pleno día es exactamente lo que la guarda tiene que confirmar.
 PROD_RE='/opt/vigia|clima-web|clima-ingesta|clima-push|deploy/deploy\.sh'
-printf '%s' "$CMD" | grep -qE "$PROD_RE" || exit 0
+# El alcance ya NO termina el hook: los destructivos globales de más abajo se
+# evalúan igual aunque el comando no nombre prod (ahí estaba el hueco).
+TOCA_PROD=1
+printf '%s' "$CMD" | grep -qE "$PROD_RE" || TOCA_PROD=0
 
 ask() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "$1"
   exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Destructivos globales: se evalúan aunque el comando NO nombre producción
+# ---------------------------------------------------------------------------
+# Todo el resto de este guard solo mira comandos que mencionan prod de este
+# proyecto (PROD_RE). Eso dejaba un hueco verificado: un `rm -rf /` suelto no
+# nombra nada de prod, así que el hook salía sin decisión y con exit 0 — es
+# decir, pasaba.
+#
+# Esta lista es lo contrario de la allow-list del resto del archivo: enumera
+# patrones inequívocamente destructivos a nivel de MÁQUINA, donde un falso
+# positivo cuesta una confirmación y un falso negativo cuesta el servidor. Por
+# eso cada patrón exige que el blanco sea la raíz, el home completo, un
+# directorio de sistema entero o un dispositivo de bloque: un
+# `rm -rf /opt/vigia/data` NO cae acá, lo sigue clasificando el flujo normal.
+#
+# Este repo no tiene rama de modo cron (su deploy no pasa por `claude -p`), así
+# que el veredicto es siempre `ask`. En una sesión headless un `ask` se resuelve
+# como denegación, así que igual queda bloqueado.
+#
+# Las comillas se quitan antes de comparar (`tr -d '\042\047'`, o sea " y '),
+# para que `rm -rf "/"` no esquive el patrón por una comilla.
+#
+# Devuelve 0 e imprime el motivo si el comando es un destructivo global.
+destructivo_global() {
+  local c
+  c="$(printf '%s' "$1" | tr -d '\042\047')"
+
+  # rm sobre la raíz, el home completo o un directorio de sistema entero.
+  printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])rm[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(/|~|\$HOME|/home/[A-Za-z0-9._-]+|/(etc|usr|var|bin|sbin|lib|lib64|boot|root|home|opt|srv|dev|proc|sys))/?\*?[[:space:]]*($|[;&|])' \
+    && { printf 'rm sobre la raiz, el home completo o un directorio de sistema entero'; return 0; }
+
+  # Formatear un filesystem: no tiene vuelta atrás.
+  printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])mkfs(\.[a-z0-9]+)?([[:space:]]|$)' \
+    && { printf 'mkfs: formatea un filesystem completo'; return 0; }
+
+  # Escritura directa a un dispositivo. /dev/null y compañía son inofensivos y
+  # quedan explícitamente fuera (`dd of=/dev/null` es un no-op legítimo).
+  if printf '%s' "$c" | grep -qE 'of=/dev/'; then
+    printf '%s' "$c" | grep -qE 'of=/dev/(null|zero|stdout|stderr|tty|full|random|urandom)([[:space:]]|$)' \
+      || { printf 'dd escribiendo directo a un dispositivo'; return 0; }
+  fi
+  printf '%s' "$c" | grep -qE '(>[[:space:]]*|(^|[^[:alnum:]_-])tee[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)/dev/(sd[a-z]|nvme[0-9]|vd[a-z]|hd[a-z]|mmcblk[0-9]|loop[0-9]|md[0-9]|dm-[0-9]|disk[0-9]|mapper/)' \
+    && { printf 'escritura directa a un dispositivo de bloque'; return 0; }
+
+  # Podas de docker: barren recursos de TODOS los stacks de la VM, no solo de
+  # este proyecto (en esta máquina conviven Vigía, los dos ERP y el chatbot).
+  printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])docker[[:space:]]+(system|volume|builder|image|network|container)[[:space:]]+prune([[:space:]]|$)' \
+    && { printf 'docker prune: barre recursos de todos los stacks de la maquina'; return 0; }
+  printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])docker[[:space:]]+volume[[:space:]]+rm([[:space:]]|$)' \
+    && { printf 'docker volume rm: borra el volumen de datos de un stack'; return 0; }
+
+  # chmod/chown recursivo cuyo blanco es la raíz: deja la máquina inarrancable.
+  # Se exige el flag recursivo Y que el último argumento sea `/` — un
+  # `chown -R rafael /opt/vigia` no cae acá.
+  if printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])(chmod|chown)[[:space:]]'; then
+    printf '%s' "$c" | grep -qE '(^|[[:space:]])(-[[:alnum:]]*R[[:alnum:]]*|--recursive)([[:space:]]|$)' \
+      && printf '%s' "$c" | grep -qE '[[:space:]]/(\*)?[[:space:]]*($|[;&|])' \
+      && { printf 'chmod/chown recursivo sobre la raiz del sistema'; return 0; }
+  fi
+
+  # Fork bomb: una función que se llama a sí misma en pipe y en background.
+  printf '%s' "$c" | grep -qE '[A-Za-z_:][A-Za-z0-9_:]*\(\)[[:space:]]*\{[^}]*\|[^}]*&' \
+    && { printf 'fork bomb'; return 0; }
+
+  # Apagar o reiniciar la VM: se lleva por delante TODOS los servicios. Se ancla
+  # a posición de comando (inicio o tras `;`/`|`/`&`) para no dispararse con un
+  # `grep -i reboot /var/log/syslog`.
+  printf '%s' "$c" | grep -qE '(^|[;&|])[[:space:]]*(sudo[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)?(systemctl[[:space:]]+)?(/sbin/|/usr/sbin/)?(shutdown|reboot|poweroff|halt)([[:space:]]|$)' \
+    && { printf 'apagado o reinicio de la maquina completa'; return 0; }
+  printf '%s' "$c" | grep -qE '(^|[;&|])[[:space:]]*(sudo[[:space:]]+)?init[[:space:]]+[06]([[:space:]]|$)' \
+    && { printf 'init 0/6: apagado o reinicio de la maquina completa'; return 0; }
+
+  return 1
 }
 
 # Quita el prefijo `sudo` (y sus flags) de un segmento: clasificar
@@ -218,7 +296,21 @@ EOF
   return 0
 }
 
-is_read_only "$CMD" && exit 0
+# El fast-path de solo lectura solo tiene sentido para lo que toca prod: si el
+# comando está fuera de alcance, se salta directo a los destructivos globales
+# (más abajo) para no pagar este análisis en CADA comando de la sesión.
+[ "$TOCA_PROD" = "1" ] && is_read_only "$CMD" && exit 0
+
+# ---------------------------------------------------------------------------
+# Destructivos globales (van ANTES del corte por alcance)
+# ---------------------------------------------------------------------------
+# Es justamente el comando que no nombra prod el que hoy se colaba.
+if MOTIVO_GLOBAL="$(destructivo_global "$CMD")"; then
+  ask "DESTRUCTIVO GLOBAL: $MOTIVO_GLOBAL. No toca solo Vigia: afecta a toda la maquina (aca conviven Vigia, los dos ERP y el chatbot). Si de verdad es lo que quieres, confirma; si no, cancela."
+fi
+
+# Fuera del alcance de producción de este proyecto: no hay nada más que decidir.
+[ "$TOCA_PROD" = "1" ] || exit 0
 
 # ---------------------------------------------------------------------------
 # Sesión interactiva: confirmación explícita antes de tocar prod
