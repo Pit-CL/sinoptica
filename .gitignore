@@ -36,6 +36,9 @@ web/combustible.json
 # Secretos: jamás al repo
 .env
 
-# Config local del entorno de trabajo
-.claude/settings.json
+# Config local del entorno de trabajo. `settings.json` SÍ se versiona (declara
+# los hooks del repo, que son la guarda ejecutable de las reglas duras: una
+# guarda que no está en main no existe para quien clona ni para el auditor
+# diario de guardas del fleet). Lo local de cada máquina va en
+# `settings.local.json`, que sigue fuera.
 .claude/settings.local.json
