@@ -11,12 +11,20 @@
 # Este repo NO tiene rama de modo cron a propósito: el deploy de madrugada
 # (scripts/deploy-cron.sh) invoca deploy/deploy.sh DIRECTO, sin `claude -p` de
 # por medio, así que no hay hook que sortear. Por eso todos los casos corren en
-# modo interactivo: lo que toca prod y no es de solo lectura debe dar `ask`, y
-# los diagnósticos deben pasar sin molestar.
+# modo interactivo: lo que MUTA prod debe dar `ask`, y los diagnósticos deben
+# pasar sin molestar.
+#
+# Desde el 2026-08-13 el clasificador vive en el núcleo compartido
+# (~/.claude/lib/prod-guard-core.sh, repo dotfiles) y la sesión interactiva usa
+# una deny-list por DESTINO + verbo mutante, en vez de una allow-list que
+# enumeraba formas de leer. La sección 6 fija el fail-closed cuando el núcleo no
+# está instalado.
 #
 # Uso:
 #   bash scripts/tests/prod-guard-cases.sh
 #   exit 0 = todo pasa · exit 1 = imprime cada caso fallido y el resumen.
+#   Requiere el núcleo instalado; PROD_GUARD_SIN_NUCLEO=1 reduce la corrida al
+#   fail-closed (es lo único verificable sin acceso al HOME del usuario).
 #
 # Si un caso legítimo falla, el bug está en el guard, NO en el caso.
 #
@@ -33,6 +41,30 @@ if [ ! -f "$GUARD" ]; then
 fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: falta jq (lo necesita el propio prod-guard.sh)" >&2
+  exit 1
+fi
+NUCLEO="$HOME/.claude/lib/prod-guard-core.sh"
+if [ ! -r "$NUCLEO" ]; then
+  if [ "${PROD_GUARD_SIN_NUCLEO:-0}" != "1" ]; then
+    echo "ERROR: falta el núcleo compartido en $NUCLEO." >&2
+    echo "       Instálalo con ./install.sh del repo dotfiles (claude/lib/prod-guard-core.sh)." >&2
+    exit 1
+  fi
+  echo "== Sin núcleo instalado (PROD_GUARD_SIN_NUCLEO=1): solo se verifica el fail-closed =="
+  if ! bash -n "$GUARD"; then
+    echo "  FALLA sintaxis del hook" >&2
+    exit 1
+  fi
+  echo "  ok    sintaxis del hook"
+  VEREDICTO_SIN_NUCLEO="$(printf '%s' 'docker rm -f clima-web' | jq -Rs '{tool_input: {command: .}}' \
+    | bash "$GUARD" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+  if [ "$VEREDICTO_SIN_NUCLEO" = "ask" ]; then
+    echo "  ok    el hook pide confirmación cuando no encuentra su núcleo (no se cae en silencio)"
+    echo
+    echo "OMITIDA la batería completa: instala el núcleo para correrla."
+    exit 0
+  fi
+  echo "  FALLA el hook NO pidió confirmación sin núcleo (obtenido: ${VEREDICTO_SIN_NUCLEO:-allow})" >&2
   exit 1
 fi
 
@@ -89,9 +121,14 @@ EOF
 caso ask "$CMD_RSYNC"
 caso ask 'cd /opt/vigia && docker compose up -d && docker compose restart'
 caso ask 'cd /opt/vigia && docker compose restart web'
-caso ask 'cd /opt/vigia && docker compose exec ingesta python3 /app/ingesta/run.py --all'
 caso ask 'cd /opt/vigia && docker compose run --rm push python3 /app/push/genkeys.py'
-caso ask "cd /opt/vigia && docker compose exec ingesta sh -c 'du -h /data/clima.db'"
+# `docker compose exec` entra a un contenedor que YA está corriendo: no crea, no
+# para y no recrea nada, así que no es un verbo mutante y pasa — igual criterio
+# que en erp-rollitos, donde `docker exec … psql` es la forma normal de leer la
+# BD de prod. Lo que sí clasifica el guard es lo que se ejecuta adentro: el
+# `sqlite3 … DELETE` y el `DROP TABLE` de la sección 4 siguen preguntando.
+caso allow 'cd /opt/vigia && docker compose exec ingesta python3 /app/ingesta/run.py --all'
+caso allow "cd /opt/vigia && docker compose exec ingesta sh -c 'du -h /data/clima.db'"
 
 # El cron de madrugada NO pasa por una sesión de Claude, así que su dry-run no
 # toca la guarda (tampoco nombra /opt/vigia ni deploy/deploy.sh).
@@ -210,6 +247,56 @@ caso allow 'dd if=/tmp/x.img of=/dev/null bs=1M count=1'
 caso allow 'grep -i reboot /var/log/syslog'
 caso allow 'rm -rf web/node_modules'
 caso allow 'docker image ls'
+
+# ---------------------------------------------------------------------------
+# 6. Deny-list en sesión: los falsos positivos no vuelven, los mutantes sí
+# ---------------------------------------------------------------------------
+# El guard ya no enumera formas de LEER (conjunto abierto: cada forma nueva era
+# una confirmación nueva). Pregunta por DESTINO + verbo mutante, y todo lo demás
+# pasa. Este repo aportó 1 sola confirmación al catastro de 143 del fleet
+# (2026-07-05 → 2026-08-13) —el `git reset --hard` del checkout de DESARROLLO,
+# que no toca prod— y sigue pasando sin preguntar.
+echo "== 6. Deny-list: lecturas pasan, mutantes preguntan =="
+
+caso allow 'git -C /home/rafael/Documents/Recursos/Proyectos/clima reset --hard HEAD'
+caso allow 'docker exec clima-ingesta env | grep -i TZ'
+caso allow "docker exec clima-ingesta sh -c 'sqlite3 /data/clima.db \"SELECT COUNT(*) FROM obs\"'"
+caso allow 'crontab -l | grep vigia'
+caso allow 'git commit -m "fix(web): corregir el badge de vigia.cavara.cl"'
+caso allow 'for c in clima-web clima-ingesta; do docker logs --tail 5 $c; done'
+caso allow 'cat /opt/vigia/web/status.json | jq .observaciones'
+caso allow "curl -s -o /dev/null -w '%{http_code}' https://vigia.cavara.cl/"
+
+# Lo que muta prod sigue preguntando, en minúsculas también (sqlite acepta las
+# dos formas igual).
+caso ask "docker exec clima-ingesta sh -c 'sqlite3 /data/clima.db \"delete from obs where id = 1\"'"
+caso ask "docker exec clima-ingesta sh -c 'sqlite3 /data/clima.db \"update obs set valor = 0\"'"
+caso ask 'rsync -a --delete ./ /opt/vigia/'
+caso ask 'cp deploy/nginx.conf /opt/vigia/deploy/nginx.conf'
+caso ask 'chmod -R 777 /opt/vigia'
+caso ask 'mv /opt/vigia/.env /tmp/env.bak'
+caso ask 'curl -X POST https://vigia.cavara.cl/api/x -d "{}"'
+caso ask 'systemctl restart clima-web'
+
+# ---------------------------------------------------------------------------
+# 7. Fail-closed: sin núcleo instalado el hook NO se calla
+# ---------------------------------------------------------------------------
+# Un hook que no encuentra su núcleo y sale con exit 0 hace desaparecer la
+# guarda en silencio (los hooks fallan non-blocking). Tiene que preguntar.
+echo "== 7. Fail-closed sin el núcleo compartido =="
+TOTAL=$((TOTAL + 1))
+HOME_VACIO="$(mktemp -d)"
+SIN_NUCLEO="$(printf '%s' 'docker rm -f clima-web' | jq -Rs '{tool_input: {command: .}}' \
+  | HOME="$HOME_VACIO" bash "$GUARD" 2>/dev/null \
+  | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+rmdir "$HOME_VACIO" 2>/dev/null
+if [ "$SIN_NUCLEO" = "ask" ]; then
+  printf '  ok    %-5s %s\n' "ask" "hook sin núcleo instalado"
+else
+  FALLOS=$((FALLOS + 1))
+  printf '  FALLA %-5s %s\n' "ask" "hook sin núcleo instalado (obtenido: ${SIN_NUCLEO:-allow})"
+  DETALLE+=("sin nucleo: esperado=ask obtenido=${SIN_NUCLEO:-allow}")
+fi
 
 echo
 if [ "$FALLOS" -gt 0 ]; then
