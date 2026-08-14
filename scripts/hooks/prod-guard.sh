@@ -72,6 +72,47 @@ seg_cron_write() {
 # ---------------------------------------------------------------------------
 # Patrones mutantes propios — sesión interactiva
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Críticos propios de Vigía (gancho (0) de muta_prod_critico del núcleo).
+# Solo corre en la rama INTERACTIVA: el modo cron termina en cron_gate. Además
+# el deploy de este repo es `deploy/deploy.sh` corriendo directo desde el cron,
+# sin agente de por medio, así que nada de acá puede detener un deploy.
+# ---------------------------------------------------------------------------
+muta_prod_critico_proyecto() {
+  local c="$1"
+
+  # (1) SQL de escritura contra la BD de producción. El detector del núcleo mira
+  #     `psql`, y acá la BD es SQLite dentro del contenedor: llega como
+  #     `docker exec … sqlite3 /data/clima.db "DELETE FROM obs"`, como
+  #     `docker compose exec … sh -c 'sqlite3 …'` o embebido en un
+  #     `python3 -c "sqlite3.connect(…).execute(…)"`. Verificado el 2026-08-14:
+  #     `DROP TABLE ingest_log`, `DELETE FROM obs` y `update obs set valor = 0`
+  #     pasaban sin preguntar en las tres formas.
+  #
+  #     `deploy/deploy.sh` no toca la BD en ningún paso (solo rsync + recreación
+  #     de contenedores), así que la regla no puede frenar un paso del deploy.
+  if printf '%s' "$c" | grep -qE '(clima\.db|sqlite3?[[:space:]._(]|sqlite3\.connect)'; then
+    printf '%s' "$c" \
+      | grep -qiE "(^|[^[:alnum:]_])(drop|delete|update|insert|alter|truncate|replace|vacuum)([[:space:]]|$)" \
+      && { printf 'RIESGO CRITICO — SQL de escritura contra la BD de produccion de Vigia (/data/clima.db): la serie historica de observaciones no se puede reconstruir, y el respaldo es semanal (domingo 04:30)'; return 0; }
+  fi
+
+  # (2) `rsync --delete` hacia /opt/vigia SIN excluir `data/`. El paso real del
+  #     deploy (deploy/deploy.sh:63) excluye `data/`, `.env` y los JSON de
+  #     estado justamente porque `--delete` borra en el destino todo lo que no
+  #     esté en el origen: sin ese exclude, el mismo comando se lleva la BD de
+  #     producción. Verificado el 2026-08-14: `rsync -a --delete ./ /opt/vigia/`
+  #     pasaba sin preguntar.
+  if printf '%s' "$c" | grep -qE '(^|[^[:alnum:]_-])rsync([[:space:]]|$)' \
+     && printf '%s' "$c" | grep -qE '(^|[[:space:]])--delete([-=][[:alnum:]-]*)?([[:space:]]|$)' \
+     && printf '%s' "$c" | grep -qE "($PG_PROD_ESCRITURA_RE)"; then
+    printf '%s' "$c" | grep -qE '(^|[[:space:]])--exclude([[:space:]]+|=)[^[:space:]]*data' \
+      || { printf 'RIESGO CRITICO — rsync --delete hacia /opt/vigia sin excluir data/: borra en el destino todo lo que no este en el origen, o sea la BD de produccion. El paso del deploy (deploy/deploy.sh:63) la excluye'; return 0; }
+  fi
+
+  return 1
+}
+
 # El núcleo ya cubre lo genérico por DESTINO (rm/mv/cp/chmod y redirecciones
 # contra /opt/vigia, SQL mutante, docker que crea/para/recrea contenedores,
 # systemctl sobre los servicios de prod, curl de escritura contra el host).
