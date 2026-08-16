@@ -13,9 +13,11 @@
 # Open-Meteo Flood API) 1x/día (el modelo global se actualiza diario).
 # avisos meteo (derivados, propios) NO tienen línea propia: se recalculan
 # dentro de las corridas de observaciones y de pronósticos (barato, sin red).
-# watchdog de frescura (aviso a Slack) cada 10 min, dormido sin
-# SLACK_WEBHOOK_URL — no es un paso de ingesta, se invoca directo como
-# push/send.py.
+# watchdog de frescura (aviso a Google Chat) cada 10 min, dormido sin
+# GCHAT_WEBHOOK_ALERTAS — no es un paso de ingesta, se invoca directo como
+# push/send.py. OJO: esa variable tiene que estar en el `environment` del
+# servicio `ingesta` del docker-compose; el .env de prod por sí solo no llega
+# hasta acá (el servicio declara variable por variable, no usa env_file).
 4,14,24,34,44,54 * * * * python3 /app/ingesta/watchdog.py >> /data/ingesta.log 2>&1
 7 * * * * python3 /app/ingesta/run.py >> /data/ingesta.log 2>&1
 37 1,13 * * * python3 /app/ingesta/run.py --forecasts >> /data/ingesta.log 2>&1
