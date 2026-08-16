@@ -81,7 +81,7 @@ fi
 # de avisar es la peor forma de fallar para un cron cuyo trabajo es avisar.
 #   gchat_post <espacio> <texto>
 gchat_post() {
-  command -v deploy_gchat_post >/dev/null 2>&1 || return 0
+  command -v deploy_gchat_post >/dev/null 2>&1 || { deploy_log "ADVERTENCIA: deploy_gchat_post no disponible (dotfiles desactualizados) — no se avisó por Google Chat"; return 1; }
   deploy_gchat_post "$1" "[VIGIA] $2"
 }
 
@@ -98,7 +98,7 @@ if ! cd "$REPO_DIR"; then
   exit 1
 fi
 
-# --- 3. Recordatorio Slack de PRs abiertos (independiente del deploy) ---
+# --- 3. Recordatorio de PRs abiertos (independiente del deploy) ---
 PR_LIST="$(deploy_pr_reminder)"
 if [ -n "$PR_LIST" ]; then
   PR_COUNT="$(printf '%s\n' "$PR_LIST" | wc -l)"

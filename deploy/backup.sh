@@ -86,7 +86,7 @@ echo "==> Backup creado: $TAR_PATH ($(du -h "$TAR_PATH" | cut -f1))"
 
 # Copia offsite a Google Drive (best-effort): el backup local YA está OK en
 # este punto, así que un fallo acá NUNCA debe tumbar el resto del script —
-# backup_drive.py maneja su propio aviso a Slack y sale con éxito si no hay
+# backup_drive.py maneja su propio aviso a Google Chat y sale con éxito si no hay
 # credenciales GDRIVE_* configuradas (patrón "dormido").
 set -a; . "$ENV_PATH"; set +a
 if [ -n "${GDRIVE_REFRESH_TOKEN:-}" ]; then
