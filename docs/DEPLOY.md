@@ -40,7 +40,7 @@ Cloudflare aporta el TLS y la CDN del borde; el origen nunca queda expuesto dire
 
 **Servidor:** repo y prod viven en la misma máquina (`/opt/vigia`); el deploy es local con `bash deploy/deploy.sh`, sin ssh de por medio. nginx escucha en `127.0.0.1:${VIGIA_HTTP_PORT:-8100}` — el puerto 8100 por defecto está libre en este VPS. El Cloudflare Tunnel de este VPS es compartido: el mismo túnel enruta `vigia.cavara.cl`/`clima.cavara.cl` (a `http://localhost:8100`) además de otros sitios del mismo VPS; su configuración vive en `/etc/cloudflared/config.yml`, no en este repo. Reiniciar `cloudflared` corta esos otros sitios por unos segundos — evita hacerlo salvo que sea necesario.
 
-**Backup:** `deploy/backup.sh` corre por cron del host (domingo 04:30) y respalda `clima.db` (hot backup vía `sqlite3` stdlib, con `integrity_check`), `.env` y `watchdog_state.json` en `/home/rafael/Backups/vigia/vigia-YYYYMMDD.tar.gz` (chmod 600, conserva los últimos 8). Avisa a Slack si falla (bot Heraldo si hay `SLACK_BOT_TOKEN`, si no `SLACK_WEBHOOK_URL` como fallback).
+**Backup:** `deploy/backup.sh` corre por cron del host (domingo 04:30) y respalda `clima.db` (hot backup vía `sqlite3` stdlib, con `integrity_check`), `.env` y `watchdog_state.json` en `/home/rafael/Backups/vigia/vigia-YYYYMMDD.tar.gz` (chmod 600, conserva los últimos 8). Avisa al espacio `alertas` de Google Chat si falla (`GCHAT_WEBHOOK_ALERTAS`).
 
 ## Seguridad
 

@@ -11,14 +11,15 @@ Umbrales: nacionales para subs sin ubicación (comportamiento original).
 Subs con ubicación (opt-in "solo mi zona") agregan un criterio de cercanía
 con umbral más bajo — ver `_cumple()`.
 
-Además del Web Push, en el mismo ciclo se procesa un suscriptor Slack
-multi-zona (SLACK_ZONAS, con fallback a la zona única legacy
-SLACK_ZONA_LAT/LON/REGION) — ver `_procesar_slack()`. Dormido si no hay
-SLACK_BOT_TOKEN ni SLACK_WEBHOOK_URL configurados (mismo patrón que
-ingesta/watchdog.py). Transporte: bot Heraldo (chat.postMessage) si hay
-token; si falla o no está configurado, reintenta por el webhook — estas son
-alertas de emergencia real y ninguna puede perderse por un token todavía
-sin invitar al canal.
+Además del Web Push, en el mismo ciclo se procesa un suscriptor de canal
+interno multi-zona (GCHAT_ZONAS, con fallback a la zona única legacy
+GCHAT_ZONA_LAT/LON/REGION — y de ahí a los nombres pre-migración
+SLACK_ZONAS/SLACK_ZONA_LAT/LON/REGION, para no quedar mudo si el .env de
+prod aún no fue renombrado) — ver `_procesar_gchat()`. Dormido si no hay
+GCHAT_WEBHOOK_ALERTAS configurada (mismo patrón que ingesta/watchdog.py).
+Transporte: webhook del espacio `alertas` de Google Chat, único canal desde
+el 2026-08-16 — antes era Slack (bot Heraldo con fallback a webhook) y se
+retiró al cancelarse Slack Pro.
 
 Eventos NACIONALES (tsunami, sismos M≥6.5/PAGER, volcanes, alertas rojas) se
 envían UNA vez a todo el canal (endpoint `slack:nacional`), sin importar
@@ -29,10 +30,16 @@ el texto. Migración: los eventos ya enviados bajo el endpoint legacy
 `slack:zona` (una sola zona, esquema anterior) no se reenvían — ver
 `_enviar_dedup`.
 
+Los identificadores `slack:*` de arriba son claves de dedup persistidas en
+`push.db` (tabla `sent`), no un destino: conservan su valor histórico a
+propósito. Renombrarlos al migrar a Google Chat habría dejado sin efecto el
+dedup y reenviado de golpe todo evento todavía vigente — una amenaza de
+tsunami en curso incluida. Misma razón para la tabla `slack_estado`.
+
 Avisos Vigía cercanos y focos de incendio cercanos, en cambio, pueden llegar
 en ráfagas de decenas por ciclo (un frente de lluvia genera un aviso por
 estación) — se agrupan en UN solo mensaje "digest" por zona por ciclo, ver
-`_digest_zona_slack`. El dedup sigue siendo por evento individual (cada
+`_digest_zona_gchat`. El dedup sigue siendo por evento individual (cada
 aviso/foco incluido en el digest se marca enviado); el digest solo cambia el
 empaque de envío, no qué se considera nuevo.
 """
@@ -86,14 +93,16 @@ RADIO_KM_ZONA = 200
 # descartaría eventos que sí calificarían para alguna sub.
 MAG_MIN_ZONA_PISO = 4.5
 
-# ── Suscriptor Slack (multi-zona) ───────────────────────────────
+# ── Suscriptor de canal interno (multi-zona) ────────────────────
 # Todas con default vacío → funcionalidad dormida (mismo patrón que
-# ingesta/watchdog.py y combustible.py). SLACK_BOT_TOKEN (bot Heraldo) es
-# el transporte actual; SLACK_WEBHOOK_URL queda como fallback de transición.
-SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
-SLACK_ZONA_REGION = os.environ.get("SLACK_ZONA_REGION", "")
+# ingesta/watchdog.py y combustible.py). Mismo espacio `alertas` que usa el
+# watchdog: estas son alertas accionables del producto, no rutina.
+GCHAT_WEBHOOK_ALERTAS = os.environ.get("GCHAT_WEBHOOK_ALERTAS", "")
+# Fallback a los nombres SLACK_ZONA_* pre-migración: es como está configurado
+# /opt/vigia/.env hoy (el deploy no regenera el .env, solo lo excluye del
+# rsync) y sin este fallback el canal de emergencia queda mudo en silencio
+# hasta que alguien rename a mano las variables en el servidor.
+GCHAT_ZONA_REGION = os.environ.get("GCHAT_ZONA_REGION") or os.environ.get("SLACK_ZONA_REGION", "")
 
 # ── Claim VAPID 'sub' (RFC 8292) ────────────────────────────────
 # pywebpush exige vapid_claims={"sub": "mailto:..."} para firmar el push;
@@ -105,16 +114,16 @@ SLACK_ZONA_REGION = os.environ.get("SLACK_ZONA_REGION", "")
 VAPID_SUB = os.environ.get("VAPID_SUB", "")
 
 
-def _float_env(nombre: str):
-    valor = os.environ.get(nombre, "")
+def _float_env(nombre: str, legacy: str = ""):
+    valor = os.environ.get(nombre, "") or (os.environ.get(legacy, "") if legacy else "")
     try:
         return float(valor) if valor else None
     except ValueError:
         return None
 
 
-SLACK_ZONA_LAT = _float_env("SLACK_ZONA_LAT")
-SLACK_ZONA_LON = _float_env("SLACK_ZONA_LON")
+GCHAT_ZONA_LAT = _float_env("GCHAT_ZONA_LAT", "SLACK_ZONA_LAT")
+GCHAT_ZONA_LON = _float_env("GCHAT_ZONA_LON", "SLACK_ZONA_LON")
 
 # Avisos Vigía / incendios: radio de cercanía a la zona (constantes propias,
 # distintas de RADIO_KM_ZONA que es para sismos).
@@ -122,12 +131,15 @@ RADIO_KM_AVISO_ZONA = 75      # avisos Vigía (viento, lluvia, calor, etc.)
 RADIO_KM_INCENDIO_ZONA = 50   # focos de calor FIRMS
 
 # Endpoints sintéticos estables: reusan la tabla `sent` (event_id, endpoint)
-# para el dedup del suscriptor Slack, igual que cualquier sub de Web Push.
-# SLACK_ENDPOINT es el esquema PRE multi-zona (una sola zona, todos los
-# eventos mezclados) — se sigue consultando en el dedup como endpoint legacy
-# para no reenviar algo que ya se mandó antes de esta migración.
-SLACK_ENDPOINT = "slack:zona"
-SLACK_ENDPOINT_NACIONAL = "slack:nacional"
+# para el dedup del suscriptor de canal interno, igual que cualquier sub de
+# Web Push. ENDPOINT_ZONA_LEGACY es el esquema PRE multi-zona (una sola zona,
+# todos los eventos mezclados) — se sigue consultando en el dedup como
+# endpoint legacy para no reenviar algo que ya se mandó antes de esa
+# migración. El prefijo `slack:` de ambos valores es histórico y NO se toca al
+# migrar a Google Chat: es la clave con la que ya están escritas las filas de
+# `sent` en producción (ver el docstring del módulo).
+ENDPOINT_ZONA_LEGACY = "slack:zona"
+ENDPOINT_NACIONAL = "slack:nacional"
 SENAPRED_URL = "https://senapred.cl/alertas/"
 FRASE_CIERRE = "— Vigía · esto NO reemplaza a los canales oficiales (SHOA/SENAPRED)."
 MENSAJE_PRUEBA_ZONA = (
@@ -136,9 +148,9 @@ MENSAJE_PRUEBA_ZONA = (
     "Prueba de tubería, no es una emergencia.")
 
 # Port a Python de EXPLICA_EVENTO/EXPLICA_NIVEL (web/app.js): mismo texto en
-# lenguaje claro que usa el frontend, para que la alerta de Slack no invente
-# un segundo tono. Si se edita uno, editar el otro (no hay build step común
-# entre el JS del frontend y este contenedor Python).
+# lenguaje claro que usa el frontend, para que la alerta del canal interno no
+# invente un segundo tono. Si se edita uno, editar el otro (no hay build step
+# común entre el JS del frontend y este contenedor Python).
 EXPLICA_EVENTO = [
     (re.compile(r"zoosanitario", re.I),
      "Vigilancia del SAG por una enfermedad animal (por ejemplo influenza aviar) detectada en la zona. "
@@ -179,15 +191,15 @@ EXPLICA_NIVEL = {
 }
 
 # Port de AVISO_EMOJI/AVISO_TIPO_LABEL (web/app.js) para los mensajes de
-# Slack de avisos Vigía — mismo criterio que EXPLICA_EVENTO arriba: si se
-# edita uno, editar el otro.
-AVISO_EMOJI_SLACK = {
+# avisos Vigía del canal interno — mismo criterio que EXPLICA_EVENTO arriba:
+# si se edita uno, editar el otro.
+AVISO_EMOJI_GCHAT = {
     "viento": "💨", "helada": "❄️", "lluvia": "🌧️", "lluvia_persistente": "🌧️",
     "calor": "🌡️", "aluvional": "⛰️💧", "nieve": "❄️", "incendio": "🔥",
     "rafagas": "🌪️", "presion": "📉", "nieve_cota_baja": "🏔️❄️",
     "ola_calor": "🥵", "ola_frio": "🥶", "tormenta": "⛈️", "uv": "☀️",
 }
-AVISO_TIPO_LABEL_SLACK = {
+AVISO_TIPO_LABEL_GCHAT = {
     "viento": "viento", "helada": "helada", "lluvia": "lluvia intensa",
     "lluvia_persistente": "lluvia persistente", "calor": "calor extremo",
     "aluvional": "riesgo aluvional", "nieve": "nieve", "incendio": "riesgo de incendio",
@@ -196,11 +208,11 @@ AVISO_TIPO_LABEL_SLACK = {
     "ola_frio": "ola de frío", "tormenta": "tormenta eléctrica", "uv": "UV extremo",
 }
 
-# Digest por zona (avisos Vigía + incendios, ver _digest_zona_slack): orden
+# Digest por zona (avisos Vigía + incendios, ver _digest_zona_gchat): orden
 # de severidad para ordenar/contar, mismo criterio que SEV_RANGO en
 # web/app.js. Tope de líneas para no generar un mensaje gigante cuando un
 # frente de lluvia produce decenas de avisos en el mismo ciclo.
-NIVEL_RANGO_SLACK = {"amarillo": 1, "naranja": 2, "rojo": 3}
+NIVEL_RANGO_GCHAT = {"amarillo": 1, "naranja": 2, "rojo": 3}
 MAX_AVISOS_DIGEST = 8
 MAX_FOCOS_DIGEST = 6
 
@@ -294,53 +306,37 @@ def _rumbo(lat0: float, lon0: float, lat: float, lon: float) -> str:
     return puntos[round(brng / 45) % 8]
 
 
-def _post_slack(texto: str) -> bool:
-    """Manda `texto` a Slack: bot Heraldo (chat.postMessage) si hay
-    SLACK_BOT_TOKEN; si falla (ej. canal sin invitar) o no hay token,
-    reintenta por el webhook como red de seguridad. Nunca propaga la
-    URL/token en el error (urllib los incluye en sus excepciones) — mismo
-    patrón que ingesta/watchdog.py._post_slack, duplicado aquí porque push/
-    e ingesta/ son contenedores separados sin módulo compartido."""
-    if SLACK_BOT_TOKEN and _post_slack_bot(texto):
-        return True
-    if SLACK_WEBHOOK_URL:
-        return _post_slack_webhook(texto)
-    return False
+def _post_gchat(texto: str) -> bool:
+    """Manda `texto` al espacio `alertas` de Google Chat, único canal desde el
+    2026-08-16 (se retiró Slack al cancelarse Slack Pro). Mismo patrón que
+    ingesta/watchdog.py._post_gchat, duplicado aquí porque push/ e ingesta/ son
+    contenedores separados sin módulo compartido.
 
+    Devuelve si la entrega se concretó de verdad, y eso es crítico: el caller
+    (`_enviar_dedup`, `_enviar_digest_zona`) solo marca el evento en `sent`
+    cuando esto devuelve verdadero. Un `True` sin entrega perdería la alerta en
+    silencio; un `False` con entrega hecha la repetiría cada 5 minutos. Por eso
+    el 2xx se mira explícitamente en vez de asumir éxito si no hubo excepción.
 
-def _post_slack_bot(texto: str) -> bool:
-    body = json.dumps({"channel": SLACK_CHANNEL_ID, "text": texto}).encode("utf-8")
-    req = urllib.request.Request(
-        "https://slack.com/api/chat.postMessage", data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {SLACK_BOT_TOKEN}"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as res:
-            data = json.loads(res.read())
-            if not data.get("ok"):
-                print(f"[slack] bot error: {data.get('error', 'desconocido')}")
-            return bool(data.get("ok"))
-    except urllib.error.HTTPError as err:
-        print(f"[slack] bot error: HTTP {err.code}")
+    Los textos ya vienen en unicode (no hay shortcodes `:warning:` que traducir,
+    a diferencia del watchdog) y el `*negrita*` heredado del formato de Slack se
+    renderiza igual en Chat, así que no hay conversión que hacer.
+
+    Nunca propaga la URL del webhook en el error: lleva `key` y `token`."""
+    if not GCHAT_WEBHOOK_ALERTAS:
         return False
-    except Exception:
-        print("[slack] bot error: error de red")
-        return False
-
-
-def _post_slack_webhook(texto: str) -> bool:
-    body = json.dumps({"text": texto}).encode("utf-8")
+    body = json.dumps({"text": f"[VIGIA] {texto}"}).encode("utf-8")
     req = urllib.request.Request(
-        SLACK_WEBHOOK_URL, data=body, method="POST",
-        headers={"Content-Type": "application/json"})
+        GCHAT_WEBHOOK_ALERTAS, data=body, method="POST",
+        headers={"Content-Type": "application/json; charset=UTF-8"})
     try:
         with urllib.request.urlopen(req, timeout=15) as res:
             return 200 <= res.status < 300
     except urllib.error.HTTPError as err:
-        print(f"[slack] webhook error: HTTP {err.code}")
+        print(f"[gchat] error: HTTP {err.code}")
         return False
     except Exception:
-        print("[slack] webhook error: error de red")
+        print("[gchat] error: error de red")
         return False
 
 
@@ -352,25 +348,26 @@ def _load_json(path: Path) -> dict:
 
 
 def _cargar_zonas() -> list[dict]:
-    """Zonas configuradas para el suscriptor Slack. Prioridad:
-    1. SLACK_ZONAS (JSON array: [{"nombre","lat","lon","region"}, ...]). Si
+    """Zonas configuradas para el suscriptor de canal interno. Prioridad:
+    1. GCHAT_ZONAS (JSON array: [{"nombre","lat","lon","region"}, ...]). Si
        está presente pero malformada (JSON inválido o campos faltantes), se
        loguea un error SIN el valor crudo (podría no ser sensible, pero no
        hay necesidad de imprimirlo) y se devuelve lista vacía — el operador
        queda sin avisos hasta corregir el env, no falla el resto del cron.
-    2. Fallback legacy: SLACK_ZONA_LAT/LON/REGION arma una zona única
-       llamada "zona" (mismo nombre que usaba el mensaje de prueba antes de
-       multi-zona) — así el deploy no requiere tocar el .env de prod.
-       Se marca `legacy=True` para que `_procesar_slack` también consulte el
-       endpoint `slack:zona` (esquema pre multi-zona) en el dedup de esta
-       zona y no re-spamee lo ya enviado.
+    2. Fallback legacy: GCHAT_ZONA_LAT/LON/REGION (o SLACK_ZONA_LAT/LON/REGION,
+       nombres pre-migración) arma una zona única llamada "zona" (mismo
+       nombre que usaba el mensaje de prueba antes de multi-zona) — es la
+       forma en que está configurado el .env de prod. Se marca `legacy=True`
+       para que `_procesar_gchat` también consulte el endpoint `slack:zona`
+       (esquema pre multi-zona) en el dedup de esta zona y no re-spamee lo ya
+       enviado.
     """
-    raw = os.environ.get("SLACK_ZONAS", "")
+    raw = os.environ.get("GCHAT_ZONAS", "") or os.environ.get("SLACK_ZONAS", "")
     if raw.strip():
         try:
             data = json.loads(raw)
             if not isinstance(data, list):
-                raise ValueError("SLACK_ZONAS debe ser un array JSON")
+                raise ValueError("GCHAT_ZONAS debe ser un array JSON")
             zonas = []
             for z in data:
                 zonas.append({
@@ -382,13 +379,13 @@ def _cargar_zonas() -> list[dict]:
                 })
             return zonas
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            print("[slack] SLACK_ZONAS malformada (JSON inválido o falta nombre/lat/lon), ignorando")
+            print("[gchat] GCHAT_ZONAS malformada (JSON inválido o falta nombre/lat/lon), ignorando")
             return []
 
-    if SLACK_ZONA_LAT is not None and SLACK_ZONA_LON is not None:
+    if GCHAT_ZONA_LAT is not None and GCHAT_ZONA_LON is not None:
         return [{
-            "nombre": "zona", "lat": SLACK_ZONA_LAT, "lon": SLACK_ZONA_LON,
-            "region": SLACK_ZONA_REGION, "legacy": True,
+            "nombre": "zona", "lat": GCHAT_ZONA_LAT, "lon": GCHAT_ZONA_LON,
+            "region": GCHAT_ZONA_REGION, "legacy": True,
         }]
     return []
 
@@ -464,7 +461,7 @@ def _eventos_tsunami() -> list[dict]:
     return [{"id": event_id, "titulo": titulo, "body": body, "url": SITE_URL, "tipo": "tsunami"}]
 
 
-def _eventos_tsunami_slack(con: sqlite3.Connection) -> list[dict]:
+def _eventos_tsunami_gchat(con: sqlite3.Connection) -> list[dict]:
     """Tsunami amenaza y precaución (a diferencia del push, que solo manda
     amenaza). El id de precaución no tiene un boletín estable como amenaza
     (puede depender solo del cruce sísmico interno de tsunami.py), así que
@@ -507,7 +504,7 @@ def _eventos_tsunami_slack(con: sqlite3.Connection) -> list[dict]:
     return [{"id": f"tsunami:{estado}:{since}", "texto": f"{texto}\n{FRASE_CIERRE}"}]
 
 
-def _eventos_sismos_slack_nacional(sismos_base: list[dict], zonas: list[dict]) -> list[dict]:
+def _eventos_sismos_gchat_nacional(sismos_base: list[dict], zonas: list[dict]) -> list[dict]:
     """Sismos de registro nacional (M≥6.5 o PAGER amarillo+): UN solo mensaje
     (endpoint slack:nacional) sin importar cuántas zonas haya configuradas.
     Si el epicentro cae a <=RADIO_KM_ZONA de alguna zona, el texto agrega la
@@ -530,10 +527,10 @@ def _eventos_sismos_slack_nacional(sismos_base: list[dict], zonas: list[dict]) -
     return eventos
 
 
-def _eventos_sismos_slack_zona(sismos_base: list[dict], zona: dict) -> list[dict]:
+def _eventos_sismos_gchat_zona(sismos_base: list[dict], zona: dict) -> list[dict]:
     """Sismos LOCALES de esta zona: M≥5.5 dentro de 200 km (vía `_cumple`),
     excluidos los nacionales (esos van una sola vez por
-    `_eventos_sismos_slack_nacional`, no se duplican aquí)."""
+    `_eventos_sismos_gchat_nacional`, no se duplican aquí)."""
     sub = {"lat": zona["lat"], "lon": zona["lon"], "radio_km": None, "mag_min": None}
     eventos = []
     for ev in sismos_base:
@@ -548,7 +545,7 @@ def _eventos_sismos_slack_zona(sismos_base: list[dict], zona: dict) -> list[dict
     return eventos
 
 
-def _texto_alerta_slack(al: dict, prefijo: str = "") -> str:
+def _texto_alerta_gchat(al: dict, prefijo: str = "") -> str:
     nivel = al.get("nivel")
     region = al.get("region") or "Chile"
     evento = al.get("evento") or al.get("categoria", "")
@@ -562,7 +559,7 @@ def _texto_alerta_slack(al: dict, prefijo: str = "") -> str:
         f"Detalle oficial: {SENAPRED_URL}")
 
 
-def _eventos_alertas_slack_nacional(alertas: list[dict]) -> list[dict]:
+def _eventos_alertas_gchat_nacional(alertas: list[dict]) -> list[dict]:
     """Rojas de cualquier región: UN solo mensaje (endpoint slack:nacional)."""
     eventos = []
     for al in alertas:
@@ -570,12 +567,12 @@ def _eventos_alertas_slack_nacional(alertas: list[dict]) -> list[dict]:
             continue
         categoria, region = al.get("categoria", ""), al.get("region") or "Chile"
         desde = al.get("desde") or ""
-        texto = _texto_alerta_slack(al)
+        texto = _texto_alerta_gchat(al)
         eventos.append({"id": f"alerta:{categoria}:{region}:{desde}", "texto": f"{texto}\n{FRASE_CIERRE}"})
     return eventos
 
 
-def _eventos_alertas_slack_zona(zona: dict, alertas: list[dict]) -> list[dict]:
+def _eventos_alertas_gchat_zona(zona: dict, alertas: list[dict]) -> list[dict]:
     """Amarillas de la región de esta zona únicamente (nunca temprana
     preventiva, es spam). Sin región configurada, la zona no recibe
     amarillas (las rojas siguen llegando igual vía el canal nacional)."""
@@ -587,12 +584,12 @@ def _eventos_alertas_slack_zona(zona: dict, alertas: list[dict]) -> list[dict]:
             continue
         categoria, region = al.get("categoria", ""), al.get("region") or "Chile"
         desde = al.get("desde") or ""
-        texto = _texto_alerta_slack(al, prefijo=f"[{zona['nombre']}] ")
+        texto = _texto_alerta_gchat(al, prefijo=f"[{zona['nombre']}] ")
         eventos.append({"id": f"alerta:{categoria}:{region}:{desde}", "texto": f"{texto}\n{FRASE_CIERRE}"})
     return eventos
 
 
-def _eventos_volcanes_slack() -> list[dict]:
+def _eventos_volcanes_gchat() -> list[dict]:
     """NACIONAL: alerta de volcán no tiene una zona natural (el radio de
     peligro real depende del volcán, no de RADIO_KM_ZONA) — se manda una
     sola vez, igual que antes de multi-zona."""
@@ -618,7 +615,7 @@ def _dia_relativo(fecha, hoy) -> str:
     return fecha.strftime("%d-%m")
 
 
-def _eventos_avisos_slack(zona: dict, avisos: list[dict]) -> list[dict]:
+def _eventos_avisos_gchat(zona: dict, avisos: list[dict]) -> list[dict]:
     """Avisos Vigía (propios, no oficiales) de estaciones a <=RADIO_KM_AVISO_ZONA
     de la zona Y en su misma región (ver _misma_region), cualquier nivel
     (amarillo incluido).
@@ -630,7 +627,7 @@ def _eventos_avisos_slack(zona: dict, avisos: list[dict]) -> list[dict]:
     notificando la escalada. Si baja, el id vuelve a uno ya enviado ese día
     → no se reenvía (ya se avisó de ese nivel).
 
-    Devuelve datos estructurados (no texto ya armado): `_digest_zona_slack`
+    Devuelve datos estructurados (no texto ya armado): `_digest_zona_gchat`
     los ordena y agrupa en un solo mensaje por zona en vez de mandar uno por
     aviso (ver PR fix/slack-digest-por-zona — un frente de lluvia genera un
     aviso por estación, decenas por ciclo)."""
@@ -651,7 +648,7 @@ def _eventos_avisos_slack(zona: dict, avisos: list[dict]) -> list[dict]:
         hoy = datetime.now(CL_TZ).date()
         dia = _dia_relativo(peak_local.date(), hoy)
         hora = peak_local.strftime("%H:%M")
-        etiqueta = AVISO_TIPO_LABEL_SLACK.get(a["tipo"], a["tipo"])
+        etiqueta = AVISO_TIPO_LABEL_GCHAT.get(a["tipo"], a["tipo"])
         acuerdo = f" (acuerdo {a['acuerdo']} modelos)" if a.get("acuerdo") else ""
         linea = (
             f"• {a['nivel']} · {etiqueta} {a['valor']} {a['unidad']} peak {dia} {hora}"
@@ -665,7 +662,7 @@ def _eventos_avisos_slack(zona: dict, avisos: list[dict]) -> list[dict]:
     return eventos
 
 
-def _eventos_incendios_slack(zona: dict, focos: list[dict]) -> list[dict]:
+def _eventos_incendios_gchat(zona: dict, focos: list[dict]) -> list[dict]:
     """Focos de calor FIRMS a <=RADIO_KM_INCENDIO_ZONA de la zona Y en su
     misma región (ver _misma_region).
 
@@ -675,7 +672,7 @@ def _eventos_incendios_slack(zona: dict, focos: list[dict]) -> list[dict]:
     repetir el mismo foco todo el día en cada pasada.
 
     Devuelve datos estructurados (no texto ya armado), igual que
-    `_eventos_avisos_slack` — ver `_digest_zona_slack`."""
+    `_eventos_avisos_gchat` — ver `_digest_zona_gchat`."""
     eventos = []
     for f in focos:
         lat, lon = f.get("lat"), f.get("lon")
@@ -702,9 +699,9 @@ def _eventos_incendios_slack(zona: dict, focos: list[dict]) -> list[dict]:
     return eventos
 
 
-def _digest_zona_slack(zona: dict, avisos_nuevos: list[dict], focos_nuevos: list[dict]) -> str | None:
-    """Arma UN solo mensaje Slack con los avisos Vigía y focos de incendio
-    NUEVOS de esta zona en el ciclo (ya pasaron el dedup, ver _procesar_slack).
+def _digest_zona_gchat(zona: dict, avisos_nuevos: list[dict], focos_nuevos: list[dict]) -> str | None:
+    """Arma UN solo mensaje con los avisos Vigía y focos de incendio
+    NUEVOS de esta zona en el ciclo (ya pasaron el dedup, ver _procesar_gchat).
     None si no hay nada nuevo — nunca se manda un "resumen vacío".
 
     Avisos: ordenados de peor a mejor nivel (rojo>naranja>amarillo) y por
@@ -719,11 +716,11 @@ def _digest_zona_slack(zona: dict, avisos_nuevos: list[dict], focos_nuevos: list
 
     if avisos_nuevos:
         avisos_ordenados = sorted(
-            avisos_nuevos, key=lambda a: (-NIVEL_RANGO_SLACK.get(a["nivel"], 0), -a["valor"]))
+            avisos_nuevos, key=lambda a: (-NIVEL_RANGO_GCHAT.get(a["nivel"], 0), -a["valor"]))
         conteos = Counter(a["nivel"] for a in avisos_nuevos)
         resumen_niveles = ", ".join(
             f"{conteos[n]} {n}s" for n in ("rojo", "naranja", "amarillo") if conteos.get(n))
-        emoji = AVISO_EMOJI_SLACK.get(avisos_ordenados[0]["tipo"], "⚠️")
+        emoji = AVISO_EMOJI_GCHAT.get(avisos_ordenados[0]["tipo"], "⚠️")
         plural = len(avisos_nuevos) != 1
         encabezado = (
             f"{emoji} [{zona['nombre']}] {len(avisos_nuevos)} {'avisos' if plural else 'aviso'} Vigía"
@@ -750,23 +747,23 @@ def _digest_zona_slack(zona: dict, avisos_nuevos: list[dict], focos_nuevos: list
     return "\n\n".join(partes)
 
 
-def _eventos_nacionales_slack(con: sqlite3.Connection, sismos_base: list[dict],
+def _eventos_nacionales_gchat(con: sqlite3.Connection, sismos_base: list[dict],
                                zonas: list[dict], alertas: list[dict]) -> list[dict]:
     return (
-        _eventos_tsunami_slack(con)
-        + _eventos_sismos_slack_nacional(sismos_base, zonas)
-        + _eventos_alertas_slack_nacional(alertas)
-        + _eventos_volcanes_slack()
+        _eventos_tsunami_gchat(con)
+        + _eventos_sismos_gchat_nacional(sismos_base, zonas)
+        + _eventos_alertas_gchat_nacional(alertas)
+        + _eventos_volcanes_gchat()
     )
 
 
-def _eventos_zona_slack_individuales(sismos_base: list[dict], zona: dict, alertas: list[dict]) -> list[dict]:
+def _eventos_zona_gchat_individuales(sismos_base: list[dict], zona: dict, alertas: list[dict]) -> list[dict]:
     """Eventos de zona que siguen yendo individuales: sismos locales y
     alertas SENAPRED amarillas — son raros y urgentes, no ameritan digest
-    (a diferencia de avisos Vigía/incendios, ver `_digest_zona_slack`)."""
+    (a diferencia de avisos Vigía/incendios, ver `_digest_zona_gchat`)."""
     return (
-        _eventos_sismos_slack_zona(sismos_base, zona)
-        + _eventos_alertas_slack_zona(zona, alertas)
+        _eventos_sismos_gchat_zona(sismos_base, zona)
+        + _eventos_alertas_gchat_zona(zona, alertas)
     )
 
 
@@ -781,12 +778,12 @@ def _dedup_pendiente(event_id: str, endpoint: str, endpoints_legacy: list[str],
 
 def _enviar_dedup(con: sqlite3.Connection, event_id: str, texto: str, endpoint: str,
                    endpoints_legacy: list[str], ya_enviados: set[tuple[str, str]]) -> None:
-    """Envía un evento de Slack con dedup por (event_id, endpoint) y además
-    consulta `endpoints_legacy` (endpoints del esquema pre multi-zona) para
-    no reenviar algo ya notificado antes de esta migración."""
+    """Envía un evento del canal interno con dedup por (event_id, endpoint) y
+    además consulta `endpoints_legacy` (endpoints del esquema pre multi-zona)
+    para no reenviar algo ya notificado antes de esa migración."""
     if not _dedup_pendiente(event_id, endpoint, endpoints_legacy, ya_enviados):
         return
-    if _post_slack(texto):
+    if _post_gchat(texto):
         con.execute(
             "INSERT OR IGNORE INTO sent(event_id, endpoint, sent_at) VALUES (?, ?, datetime('now'))",
             (event_id, endpoint))
@@ -801,10 +798,10 @@ def _enviar_digest_zona(con: sqlite3.Connection, zona: dict, endpoint: str,
     si el POST tuvo éxito, marca cada event_id incluido como enviado bajo
     `endpoint` — el dedup sigue siendo por evento individual, el digest solo
     cambia el empaque de envío."""
-    texto = _digest_zona_slack(zona, avisos_nuevos, focos_nuevos)
+    texto = _digest_zona_gchat(zona, avisos_nuevos, focos_nuevos)
     if texto is None:
         return
-    if not _post_slack(texto):
+    if not _post_gchat(texto):
         return
     for ev in avisos_nuevos + focos_nuevos:
         con.execute(
@@ -814,10 +811,10 @@ def _enviar_digest_zona(con: sqlite3.Connection, zona: dict, endpoint: str,
     con.commit()
 
 
-def _procesar_slack(con: sqlite3.Connection, sismos_base: list[dict], ya_enviados: set[tuple[str, str]]) -> None:
-    """Suscriptor Slack multi-zona: independiente de si hay suscripciones
-    Web Push (no depende de la tabla `subs`)."""
-    if not (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL):
+def _procesar_gchat(con: sqlite3.Connection, sismos_base: list[dict], ya_enviados: set[tuple[str, str]]) -> None:
+    """Suscriptor de canal interno multi-zona: independiente de si hay
+    suscripciones Web Push (no depende de la tabla `subs`)."""
+    if not GCHAT_WEBHOOK_ALERTAS:
         return
     zonas = _cargar_zonas()
     if not zonas:
@@ -827,19 +824,20 @@ def _procesar_slack(con: sqlite3.Connection, sismos_base: list[dict], ya_enviado
     avisos = _load_json(AVISOS_PATH).get("avisos", [])
     focos = _load_json(INCENDIOS_PATH).get("focos", [])
 
-    for ev in _eventos_nacionales_slack(con, sismos_base, zonas, alertas):
-        _enviar_dedup(con, ev["id"], ev["texto"], SLACK_ENDPOINT_NACIONAL, [SLACK_ENDPOINT], ya_enviados)
+    for ev in _eventos_nacionales_gchat(con, sismos_base, zonas, alertas):
+        _enviar_dedup(con, ev["id"], ev["texto"], ENDPOINT_NACIONAL, [ENDPOINT_ZONA_LEGACY], ya_enviados)
 
     for zona in zonas:
+        # Prefijo `slack:` histórico: clave de dedup ya persistida, no destino.
         endpoint = f"slack:zona:{zona['nombre']}"
-        endpoints_legacy = [SLACK_ENDPOINT] if zona.get("legacy") else []
+        endpoints_legacy = [ENDPOINT_ZONA_LEGACY] if zona.get("legacy") else []
 
-        for ev in _eventos_zona_slack_individuales(sismos_base, zona, alertas):
+        for ev in _eventos_zona_gchat_individuales(sismos_base, zona, alertas):
             _enviar_dedup(con, ev["id"], ev["texto"], endpoint, endpoints_legacy, ya_enviados)
 
-        avisos_nuevos = [a for a in _eventos_avisos_slack(zona, avisos)
+        avisos_nuevos = [a for a in _eventos_avisos_gchat(zona, avisos)
                           if _dedup_pendiente(a["id"], endpoint, endpoints_legacy, ya_enviados)]
-        focos_nuevos = [f for f in _eventos_incendios_slack(zona, focos)
+        focos_nuevos = [f for f in _eventos_incendios_gchat(zona, focos)
                          if _dedup_pendiente(f["id"], endpoint, endpoints_legacy, ya_enviados)]
         _enviar_digest_zona(con, zona, endpoint, avisos_nuevos, focos_nuevos, ya_enviados)
 
@@ -924,8 +922,11 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS sent("
         "event_id TEXT, endpoint TEXT, sent_at TEXT, PRIMARY KEY(event_id, endpoint))"
     )
-    # Estado de transición para el suscriptor Slack (ver _eventos_tsunami_slack):
-    # solo lo usa "tsunami" hoy, pero se deja genérico por clave.
+    # Estado de transición del suscriptor de canal interno (ver
+    # _eventos_tsunami_gchat): solo lo usa "tsunami" hoy, pero se deja genérico
+    # por clave. El nombre `slack_estado` es histórico y se conserva a propósito
+    # — renombrar la tabla al migrar a Google Chat habría descartado el estado
+    # vigente y reenviado un tsunami en curso (ver docstring del módulo).
     con.execute(
         "CREATE TABLE IF NOT EXISTS slack_estado("
         "clave TEXT PRIMARY KEY, valor TEXT, since TEXT)"
@@ -1005,8 +1006,8 @@ def main() -> None:
 
     ya_enviados = {(r[0], r[1]) for r in con.execute("SELECT event_id, endpoint FROM sent").fetchall()}
 
-    # El suscriptor Slack no depende de que existan subs de Web Push.
-    _procesar_slack(con, sismos_base, ya_enviados)
+    # El suscriptor de canal interno no depende de que existan subs de Web Push.
+    _procesar_gchat(con, sismos_base, ya_enviados)
 
     subs = con.execute(
         "SELECT endpoint, p256dh, auth, lat, lon, radio_km, mag_min, kit_reminder FROM subs"
@@ -1045,10 +1046,10 @@ def _cli() -> int:
     args = ap.parse_args()
 
     if args.test_zona:
-        if not (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL):
-            print("[slack] ni SLACK_BOT_TOKEN ni SLACK_WEBHOOK_URL configurados, nada que probar")
+        if not GCHAT_WEBHOOK_ALERTAS:
+            print("[gchat] GCHAT_WEBHOOK_ALERTAS no configurada, nada que probar")
             return 1
-        return 0 if _post_slack(MENSAJE_PRUEBA_ZONA) else 1
+        return 0 if _post_gchat(MENSAJE_PRUEBA_ZONA) else 1
 
     main()
     return 0
