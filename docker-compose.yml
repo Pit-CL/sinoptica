@@ -57,7 +57,7 @@ services:
       FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
       CNE_EMAIL: ${CNE_EMAIL:-}
       CNE_PASSWORD: ${CNE_PASSWORD:-}
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      GCHAT_WEBHOOK_ALERTAS: ${GCHAT_WEBHOOK_ALERTAS:-}
     volumes:
       - ./ingesta:/app/ingesta:ro
       - ./deploy/crontab:/crontab-src:ro
@@ -86,11 +86,11 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:?}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_SUB: ${VAPID_SUB:-}
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
-      SLACK_ZONAS: ${SLACK_ZONAS:-}
-      SLACK_ZONA_LAT: ${SLACK_ZONA_LAT:-}
-      SLACK_ZONA_LON: ${SLACK_ZONA_LON:-}
-      SLACK_ZONA_REGION: ${SLACK_ZONA_REGION:-}
+      GCHAT_WEBHOOK_ALERTAS: ${GCHAT_WEBHOOK_ALERTAS:-}
+      GCHAT_ZONAS: ${GCHAT_ZONAS:-}
+      GCHAT_ZONA_LAT: ${GCHAT_ZONA_LAT:-}
+      GCHAT_ZONA_LON: ${GCHAT_ZONA_LON:-}
+      GCHAT_ZONA_REGION: ${GCHAT_ZONA_REGION:-}
     volumes:
       - ./push:/app/push:ro
       - ./web/comunas.json:/app/web/comunas.json:ro
