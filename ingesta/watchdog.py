@@ -1,9 +1,9 @@
-"""Vigilancia de frescura de los JSON críticos, con aviso a Slack.
+"""Vigilancia de frescura de los JSON críticos, con aviso a Google Chat.
 
 Hoy nadie se entera si la ingesta muere o una fuente de peligro lleva horas
 caída (cero monitoreo; el smoke test solo corre al deployar). Este script,
 pensado para correr cada 10 min por cron, compara el campo "updated" de
-cada JSON crítico contra un umbral propio y avisa por Slack solo en las
+cada JSON crítico contra un umbral propio y avisa solo en las
 transiciones (anti-spam pedido explícito): al ENTRAR en falla, cada 6 h de
 recordatorio mientras siga caído, y al recuperarse.
 
@@ -11,22 +11,18 @@ No es un paso de la ingesta (no fetchea nada externo ni escribe en la BD):
 es un monitor independiente, igual que push/send.py — se invoca directo
 desde cron, no se integra a run.py.
 
-Patrón "dormido" (igual que combustible.py): sin SLACK_BOT_TOKEN ni
-SLACK_WEBHOOK_URL, exit 0 silencioso — no es un error, es que el operador no
-configuró avisos.
+Patrón "dormido" (igual que combustible.py): sin GCHAT_WEBHOOK_ALERTAS,
+exit 0 silencioso — no es un error, es que el operador no configuró avisos.
 
-Transporte: bot Heraldo (chat.postMessage) si hay SLACK_BOT_TOKEN; si falla
-o no está configurado, reintenta por el webhook — Vigía no puede quedar sin
-ruta de envío mientras el bot no esté invitado a todos los canales.
+Transporte: webhook del espacio `alertas` de Google Chat. Es el único desde
+el 2026-08-16: el envío a Slack se retiró al cancelarse Slack Pro.
 
-Doble envío (migración 2026-08-16): el mismo aviso sale además al espacio
-`alertas` de Google Chat vía GCHAT_WEBHOOK_ALERTAS, sin retirar nada de
-Slack. El veredicto que decide las transiciones de estado es el de CUALQUIERA
-de los dos canales (ver `_notificar`): si uno de los dos falla de forma
-persistente mientras el otro sigue sano, la transición igual queda registrada
-y no se re-notifica en cada corrida.
+El veredicto de la entrega decide las transiciones de estado (ver
+`_notificar`): `run()` solo registra la transición si el aviso salió de
+verdad, así que un fallo del canal hace reintentar en la corrida siguiente en
+vez de dar por avisado algo que nadie vio.
 
-Nunca debe filtrar el webhook ni el token: urllib incluye la URL completa
+Nunca debe filtrar el webhook: urllib incluye la URL completa
 en sus excepciones, así que el manejo de errores solo reporta "HTTP
 <código>" o "error de red", jamás el error crudo (que trae la URL/token).
 """
@@ -133,57 +129,10 @@ def _guardar_estado(estado: dict) -> None:
     config.WATCHDOG_STATE_PATH.write_text(json.dumps(estado, ensure_ascii=False) + "\n")
 
 
-def _post_slack(texto: str) -> bool:
-    """Manda `texto` a Slack: bot Heraldo (chat.postMessage) si hay
-    SLACK_BOT_TOKEN; si falla (ej. canal sin invitar) o no hay token,
-    reintenta por el webhook como red de seguridad. Nunca propaga la
-    URL/token en el error."""
-    if config.SLACK_BOT_TOKEN and _post_slack_bot(texto):
-        return True
-    if config.SLACK_WEBHOOK_URL:
-        return _post_slack_webhook(texto)
-    return False
-
-
-def _post_slack_bot(texto: str) -> bool:
-    body = json.dumps({"channel": config.SLACK_CHANNEL_ID, "text": texto}).encode("utf-8")
-    req = urllib.request.Request(
-        "https://slack.com/api/chat.postMessage", data=body, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {config.SLACK_BOT_TOKEN}"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as res:
-            data = json.loads(res.read())
-            if not data.get("ok"):
-                print(f"[error] slack bot: {data.get('error', 'desconocido')}", file=sys.stderr)
-            return bool(data.get("ok"))
-    except urllib.error.HTTPError as err:
-        print(f"[error] slack bot: HTTP {err.code}", file=sys.stderr)
-        return False
-    except Exception:
-        print("[error] slack bot: error de red", file=sys.stderr)
-        return False
-
-
-def _post_slack_webhook(texto: str) -> bool:
-    body = json.dumps({"text": texto}).encode("utf-8")
-    req = urllib.request.Request(
-        config.SLACK_WEBHOOK_URL, data=body, method="POST",
-        headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as res:
-            return 200 <= res.status < 300
-    except urllib.error.HTTPError as err:
-        print(f"[error] slack webhook: HTTP {err.code}", file=sys.stderr)
-        return False
-    except Exception:
-        print("[error] slack webhook: error de red", file=sys.stderr)
-        return False
-
-
-# Los webhooks de Google Chat no resuelven los shortcodes de emoji que sí
-# entiende Slack: se traducen antes de enviar. Si aparece uno no listado se
-# deja tal cual — un emoji sin convertir no es motivo para perder el aviso.
+# Los webhooks de Chat no resuelven los shortcodes de emoji que quedaron en los
+# textos (herencia del formato de Slack): se traducen antes de enviar. Si
+# aparece uno no listado se deja tal cual — un emoji sin convertir no es motivo
+# para perder el aviso.
 _GCHAT_EMOJI = {
     ":red_circle:": "🔴",
     ":large_green_circle:": "🟢",
@@ -196,10 +145,15 @@ _GCHAT_EMOJI = {
 
 
 def _post_gchat(texto: str) -> bool:
-    """Manda `texto` al espacio `alertas` de Google Chat (doble envío,
-    migración 2026-08-16). Best-effort a propósito: su resultado NO decide las
-    transiciones de estado del watchdog — eso lo sigue mandando Slack — para que
-    un fallo del canal nuevo no re-notifique ni silencie lo que ya funcionaba.
+    """Manda `texto` al espacio `alertas` de Google Chat, único canal desde el
+    2026-08-16 (se retiró Slack al cancelarse Slack Pro).
+
+    Devuelve si la entrega se concretó de verdad, y eso ahora es crítico: este
+    valor es el que decide si la transición queda registrada en el estado. Un
+    `True` sin entrega perdería el aviso en silencio; un `False` con entrega
+    hecha lo repetiría cada 10 minutos. Por eso el 2xx se mira explícitamente
+    en vez de asumir éxito si no hubo excepción.
+
     Nunca propaga la URL del webhook en el error: lleva `key` y `token`."""
     if not config.GCHAT_WEBHOOK_ALERTAS:
         return False
@@ -221,15 +175,16 @@ def _post_gchat(texto: str) -> bool:
 
 
 def _notificar(texto: str) -> bool:
-    """Doble envío: manda el mismo aviso a Slack y a Google Chat, y devuelve
-    verdadero si CUALQUIERA de los dos entregó. Ese veredicto es el que decide
-    si la transición queda registrada en el estado: si dependiera solo de
-    Slack, un fallo persistente de Slack con Chat sano (o viceversa) haría que
-    el watchdog re-notificara el mismo aviso en cada corrida, justo el spam
-    que el anti-spam existe para evitar."""
-    ok_slack = _post_slack(texto)
-    ok_gchat = _post_gchat(texto)
-    return ok_slack or ok_gchat
+    """Envía el aviso y devuelve si se entregó. Queda como función propia,
+    aunque hoy sea un solo canal, porque es el punto donde vive el invariante
+    del anti-spam: `run()` solo registra la transición en el estado cuando esto
+    devuelve verdadero, así que el valor TIENE que reflejar la entrega real.
+
+    Cuando había doble envío, el veredicto era el de Slack (y luego el OR de
+    ambos). Al retirarse Slack el 2026-08-16, pasa a ser el de Google Chat: es
+    el movimiento que el propio código dejaba anotado como pendiente para este
+    momento."""
+    return _post_gchat(texto)
 
 
 def _fmt_min(minutos: float) -> str:
@@ -288,15 +243,13 @@ def main() -> int:
                      help="manda un único mensaje de prueba al webhook real y termina")
     args = ap.parse_args()
 
-    # El gate sigue siendo SOLO de Slack, a propósito, aunque ahora exista un
-    # segundo canal. Con Chat configurado y Slack no, `_notificar` devolvería
-    # siempre False (su veredicto es el de Slack), así que `run()` nunca
-    # guardaría el estado de la transición y volvería a avisar por Chat en cada
-    # corrida: un aviso cada 10 min por el mismo archivo caído, justo el spam
-    # que este watchdog existe para evitar. Mientras dure el doble envío Slack
-    # está configurado siempre; cuando se corte, hay que mover el veredicto de
-    # `_notificar` a Chat y recién ahí ampliar este gate.
-    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL):
+    # El gate mira el mismo canal del que sale el veredicto de `_notificar`, y
+    # eso no es cosmético: si el watchdog corriera con el webhook sin
+    # configurar, `_notificar` devolvería siempre False, `run()` nunca guardaría
+    # el estado de la transición y volvería a intentar el aviso en cada corrida
+    # —cada 10 min por el mismo archivo caído—. Dormido y en silencio es el
+    # comportamiento correcto, igual que cuando el canal era Slack.
+    if not config.GCHAT_WEBHOOK_ALERTAS:
         return 0
 
     if args.test:

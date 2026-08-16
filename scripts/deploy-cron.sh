@@ -22,7 +22,7 @@
 # cómo salió. Corolario: tampoco hace falta la rama de "allow-list de cron" del
 # hook prod-guard.sh — no hay sesión de Claude que pueda tocar prod acá.
 #
-# El esqueleto común con los otros 3 crons (lock, gate horario, Slack,
+# El esqueleto común con los otros 3 crons (lock, gate horario, avisos,
 # recordatorio de PRs, marker) vive en ~/dotfiles/bin/lib/deploy-cron-common.sh.
 #
 # **Sin chequeo de integridad de BD** (`~/dotfiles/bin/lib/db-integrity-check.sh`),
@@ -39,7 +39,7 @@
 # Flags de test (NO usar en el crontab real):
 #   FORCE_HOUR=1  salta el gate horario (actúa sin importar la hora local)
 #   DRY_RUN=1     no ejecuta deploy/deploy.sh, no escribe el marker y no postea
-#                 a Slack — solo loguea lo que haría (git fetch y gh pr list sí
+#                 a Google Chat — solo loguea lo que haría (git fetch y gh pr list sí
 #                 corren: son de solo lectura y sirven para ver el dry-run con
 #                 datos reales)
 #
@@ -67,39 +67,21 @@ if ! . "$DEPLOY_CRON_LIB"; then
   exit 1
 fi
 
-# Canal #status-deploy, NO #vigia. La regla dura 10 del CLAUDE.md reserva #vigia
-# para eventos de zona/emergencia y fallas reales: un "deploy OK" diario ahí
-# sería exactamente el ruido informativo que esa regla prohíbe. #status-deploy
-# es el canal del flujo de deploy del fleet (el mismo del digest de las 18:00).
-# El ID no es secreto: va fijo para no depender de la API ni del .env.
-SLACK_CHANNEL="${SLACK_CHANNEL_DEPLOY:-C0BPKD0FHJP}"
-
-# Token del bot Heraldo, del .env de prod (mismo origen que usa push/send.py).
-slack_token() {
-  local v
-  [ -f "$PROD/.env" ] || return 0
-  v="$(grep -oP '(?<=^SLACK_BOT_TOKEN=).*' "$PROD/.env" 2>>"$DEPLOY_LOG" | head -1)"
-  v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
-  printf '%s' "$v"
-}
-
-slack_post() {
-  deploy_slack_post "$SLACK_CHANNEL" "$1" "$(slack_token)"
-}
-
-# Doble envío a Google Chat (migración 2026-08-16): el mismo aviso sale también
-# a un espacio de Chat, sin retirar nada de Slack. El espacio lo elige cada
-# caller según el resultado —fallo a `alertas`, rutina a `infra`— siguiendo la
-# regla general del spec de la migración.
+# Google Chat, único canal desde el 2026-08-16: el envío a Slack se retiró al
+# cancelarse Slack Pro, y con él `SLACK_CHANNEL`, `slack_token` y `slack_post`.
 #
-# `deploy_gchat_post` vive en la librería común de dotfiles. La guarda existe
-# porque este repo puede quedar mergeado ANTES que el PR de esa librería: sin
-# ella el cron moriría con "command not found" justo en el paso de avisar, que
-# es la peor forma de fallar. Con la guarda, simplemente no avisa por el canal
-# nuevo hasta que la librería esté.
+# El espacio lo elige cada caller por el resultado —deploy fallido a `alertas`,
+# rutina (deploy OK, bootstrap, recordatorio de PRs) a `infra`—, que es la misma
+# regla del spec de la migración. El criterio de fondo no cambió respecto de
+# Slack: un "deploy OK" diario no debe interrumpir a nadie.
+#
+# `deploy_gchat_post` vive en la librería común de dotfiles. La guarda se
+# mantiene aunque esa librería ya esté mergeada: las tres máquinas del fleet no
+# actualizan dotfiles a la vez, y morir con "command not found" justo en el paso
+# de avisar es la peor forma de fallar para un cron cuyo trabajo es avisar.
 #   gchat_post <espacio> <texto>
 gchat_post() {
-  command -v deploy_gchat_post >/dev/null 2>&1 || return 0
+  command -v deploy_gchat_post >/dev/null 2>&1 || { deploy_log "ADVERTENCIA: deploy_gchat_post no disponible (dotfiles desactualizados) — no se avisó por Google Chat"; return 1; }
   deploy_gchat_post "$1" "[VIGIA] $2"
 }
 
@@ -116,18 +98,17 @@ if ! cd "$REPO_DIR"; then
   exit 1
 fi
 
-# --- 3. Recordatorio Slack de PRs abiertos (independiente del deploy) ---
+# --- 3. Recordatorio de PRs abiertos (independiente del deploy) ---
 PR_LIST="$(deploy_pr_reminder)"
 if [ -n "$PR_LIST" ]; then
   PR_COUNT="$(printf '%s\n' "$PR_LIST" | wc -l)"
   deploy_log "PRs abiertos sin mergear: $PR_COUNT"
   TEXT="$(printf '📬 Vigía: %s PR(s) abiertos sin mergear — no entran al deploy de hoy:\n%s' "$PR_COUNT" "$PR_LIST")"
   if [ "${DRY_RUN:-0}" = "1" ]; then
-    deploy_log "[DRY_RUN] omitiendo el envío a Slack. Mensaje que se enviaría:"
+    deploy_log "[DRY_RUN] omitiendo el envío a Google Chat. Mensaje que se enviaría:"
     printf '%s\n' "$TEXT" >>"$DEPLOY_LOG"
   else
-    slack_post "$TEXT" || deploy_log "ADVERTENCIA: el recordatorio de PRs no se pudo enviar"
-    gchat_post infra "$TEXT"
+    gchat_post infra "$TEXT" || deploy_log "ADVERTENCIA: el recordatorio de PRs no se pudo enviar"
   fi
 else
   deploy_log "Sin PRs abiertos — sin recordatorio"
@@ -154,13 +135,12 @@ MARKER_RC=$?
 if [ "$MARKER_RC" -eq 2 ]; then
   deploy_log "sin marker: inicializando en $REMOTE_SHA sin deployar"
   if [ "${DRY_RUN:-0}" = "1" ]; then
-    deploy_log "[DRY_RUN] omitiendo escritura del marker y aviso a Slack"
+    deploy_log "[DRY_RUN] omitiendo escritura del marker y aviso a Google Chat"
   else
     printf '%s\n' "$REMOTE_SHA" >"$MARKER"
     BOOTSTRAP_TEXT="🟡 Deploy automático de Vigía inicializado en main \`${REMOTE_SHA:0:7}\`. Lo anterior a este commit NO se auto-deploya: si hay cambios pendientes de subir, corre \`bash deploy/deploy.sh\` a mano."
-    slack_post "$BOOTSTRAP_TEXT" \
-      && deploy_log "aviso de bootstrap enviado a Slack"
-    gchat_post infra "$BOOTSTRAP_TEXT"
+    gchat_post infra "$BOOTSTRAP_TEXT" \
+      && deploy_log "aviso de bootstrap enviado a Google Chat"
   fi
   deploy_log "=== fin ==="
   exit 0
@@ -181,7 +161,7 @@ deploy_log "commits nuevos detectados: $DEPLOY_LAST_SHA -> $REMOTE_SHA"
 # corre el smoke test. Si algo falla, sale !=0 y NO se avanza el marker.
 if [ "${DRY_RUN:-0}" = "1" ]; then
   deploy_log "[DRY_RUN] omitiendo: bash $REPO_DIR/deploy/deploy.sh origin/main"
-  deploy_log "[DRY_RUN] omitiendo escritura del marker ($REMOTE_SHA) y notificación a Slack"
+  deploy_log "[DRY_RUN] omitiendo escritura del marker ($REMOTE_SHA) y notificación a Google Chat"
   deploy_log "=== fin ==="
   exit 0
 fi
@@ -199,16 +179,14 @@ if [ "$DEPLOY_RC" -eq 0 ]; then
   printf '%s\n' "$REMOTE_SHA" >"$MARKER"
   deploy_log "deploy OK, marker en $REMOTE_SHA"
   OK_TEXT="$(printf '🟢 Deploy automático de Vigía OK — main `%s` en prod, smoke test verde.' "${REMOTE_SHA:0:7}")"
-  slack_post "$OK_TEXT" \
-    && deploy_log "notificación de éxito enviada a Slack"
-  gchat_post infra "$OK_TEXT"
+  gchat_post infra "$OK_TEXT" \
+    && deploy_log "notificación de éxito enviada a Google Chat"
 else
   TAIL="$(tail -n 15 "$DEPLOY_LOG")"
   deploy_log "FALLO: el deploy salió con exit $DEPLOY_RC, el marker queda en $DEPLOY_LAST_SHA"
   FAIL_TEXT="$(printf '🔴 Deploy automático de Vigía FALLÓ (main `%s`, exit %s). Prod queda en la versión anterior; el próximo tick reintenta.\nRevisar %s\nÚltimas líneas:\n```\n%s\n```' "${REMOTE_SHA:0:7}" "$DEPLOY_RC" "$DEPLOY_LOG" "$TAIL")"
-  slack_post "$FAIL_TEXT" \
-    && deploy_log "notificación de fallo enviada a Slack"
-  gchat_post alertas "$FAIL_TEXT"
+  gchat_post alertas "$FAIL_TEXT" \
+    && deploy_log "notificación de fallo enviada a Google Chat"
   deploy_log "=== fin ==="
   exit 1
 fi
