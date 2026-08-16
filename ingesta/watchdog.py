@@ -286,8 +286,15 @@ def main() -> int:
                      help="manda un único mensaje de prueba al webhook real y termina")
     args = ap.parse_args()
 
-    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL
-            or config.GCHAT_WEBHOOK_ALERTAS):
+    # El gate sigue siendo SOLO de Slack, a propósito, aunque ahora exista un
+    # segundo canal. Con Chat configurado y Slack no, `_notificar` devolvería
+    # siempre False (su veredicto es el de Slack), así que `run()` nunca
+    # guardaría el estado de la transición y volvería a avisar por Chat en cada
+    # corrida: un aviso cada 10 min por el mismo archivo caído, justo el spam
+    # que este watchdog existe para evitar. Mientras dure el doble envío Slack
+    # está configurado siempre; cuando se corte, hay que mover el veredicto de
+    # `_notificar` a Chat y recién ahí ampliar este gate.
+    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL):
         return 0
 
     if args.test:
