@@ -50,6 +50,15 @@ fail() {
                 -d "{\"text\":\"🔴 Vigía: backup semanal falló: $1\"}" \
                 "$SLACK_WEBHOOK_URL" || true
         fi
+        # Doble envío a Google Chat (migración 2026-08-16). Espacio `alertas`:
+        # un backup que falla tiene que interrumpir. Va aparte del `if` de
+        # Slack a propósito — no se condiciona a que Slack haya funcionado.
+        if [ -n "${GCHAT_WEBHOOK_ALERTAS:-}" ]; then
+            curl -s -o /dev/null --max-time 15 -X POST \
+                -H 'Content-Type: application/json; charset=UTF-8' \
+                -d "{\"text\":\"[VIGIA] 🔴 backup semanal falló: $1\"}" \
+                "$GCHAT_WEBHOOK_ALERTAS" || true
+        fi
     fi
     exit 1
 }

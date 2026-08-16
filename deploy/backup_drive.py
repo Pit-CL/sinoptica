@@ -51,6 +51,25 @@ def _slack_alert(mensaje: str) -> None:
     _slack_alert_webhook(mensaje)
 
 
+def _gchat_alert(mensaje: str) -> None:
+    """Doble envío a Google Chat, espacio `alertas` (migración 2026-08-16).
+    No reemplaza el aviso a Slack ni depende de que ese haya funcionado.
+    Best-effort igual que su par: una copia offsite que falla ya es bastante
+    problema como para que además el aviso tumbe el script."""
+    webhook = os.environ.get("GCHAT_WEBHOOK_ALERTAS", "")
+    if not webhook:
+        return
+    body = json.dumps({"text": f"[VIGIA] {mensaje}"}).encode("utf-8")
+    req = urllib.request.Request(
+        webhook, data=body, method="POST",
+        headers={"Content-Type": "application/json; charset=UTF-8"})
+    try:
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception:
+        pass  # nunca propaga la URL del webhook: lleva `key` y `token`
+
+
 def _slack_alert_bot(mensaje: str, token: str) -> bool:
     channel = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
     body = json.dumps({"channel": channel, "text": mensaje}).encode("utf-8")
@@ -84,6 +103,7 @@ def _slack_alert_webhook(mensaje: str) -> None:
 def fail(mensaje: str) -> "int":
     print(f"ERROR: {mensaje}", file=sys.stderr)
     _slack_alert(f"🔴 Vigía: copia offsite a Google Drive falló: {mensaje}")
+    _gchat_alert(f"🔴 copia offsite a Google Drive falló: {mensaje}")
     return 1
 
 

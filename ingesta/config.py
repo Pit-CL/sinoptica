@@ -143,6 +143,12 @@ COMUNAS_PATH = ROOT / "web" / "comunas.json"  # catastro INE versionado, no lo g
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "") or "C0BH5SFQHFX"
+# Google Chat, espacio `alertas` (doble envío Slack+Chat, migración 2026-08-16).
+# Mismo patrón "dormido" que Slack: sin webhook no se avisa y no es un error.
+# El espacio es `alertas` porque lo que reporta el watchdog es fallo de ingesta
+# e infraestructura propia, que debe interrumpir. NO reemplaza a Slack: los dos
+# avisos salen en paralelo hasta que el usuario decida cortar Slack.
+GCHAT_WEBHOOK_ALERTAS = os.environ.get("GCHAT_WEBHOOK_ALERTAS", "")
 WATCHDOG_STATE_PATH = Path(os.environ.get("CLIMA_WATCHDOG_STATE", ROOT / "data" / "watchdog_state.json"))
 
 # Estado del early-exit de avisos.py: último run_tag de pronóstico ya
