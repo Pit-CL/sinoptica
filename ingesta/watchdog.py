@@ -19,6 +19,12 @@ Transporte: bot Heraldo (chat.postMessage) si hay SLACK_BOT_TOKEN; si falla
 o no está configurado, reintenta por el webhook — Vigía no puede quedar sin
 ruta de envío mientras el bot no esté invitado a todos los canales.
 
+Doble envío (migración 2026-08-16): el mismo aviso sale además al espacio
+`alertas` de Google Chat vía GCHAT_WEBHOOK_ALERTAS, sin retirar nada de
+Slack. El veredicto que decide las transiciones de estado sigue siendo el de
+Slack (ver `_notificar`), para que el canal nuevo no pueda provocar
+re-notificaciones si falla.
+
 Nunca debe filtrar el webhook ni el token: urllib incluye la URL completa
 en sus excepciones, así que el manejo de errores solo reporta "HTTP
 <código>" o "error de red", jamás el error crudo (que trae la URL/token).
@@ -174,6 +180,56 @@ def _post_slack_webhook(texto: str) -> bool:
         return False
 
 
+# Los webhooks de Google Chat no resuelven los shortcodes de emoji que sí
+# entiende Slack: se traducen antes de enviar. Si aparece uno no listado se
+# deja tal cual — un emoji sin convertir no es motivo para perder el aviso.
+_GCHAT_EMOJI = {
+    ":red_circle:": "🔴",
+    ":large_green_circle:": "🟢",
+    ":white_check_mark:": "✅",
+    ":warning:": "⚠️",
+    ":x:": "❌",
+    ":robot_face:": "🤖",
+    ":wrench:": "🔧",
+}
+
+
+def _post_gchat(texto: str) -> bool:
+    """Manda `texto` al espacio `alertas` de Google Chat (doble envío,
+    migración 2026-08-16). Best-effort a propósito: su resultado NO decide las
+    transiciones de estado del watchdog — eso lo sigue mandando Slack — para que
+    un fallo del canal nuevo no re-notifique ni silencie lo que ya funcionaba.
+    Nunca propaga la URL del webhook en el error: lleva `key` y `token`."""
+    if not config.GCHAT_WEBHOOK_ALERTAS:
+        return False
+    for corto, unicode_ in _GCHAT_EMOJI.items():
+        texto = texto.replace(corto, unicode_)
+    body = json.dumps({"text": f"[VIGIA] {texto}"}).encode("utf-8")
+    req = urllib.request.Request(
+        config.GCHAT_WEBHOOK_ALERTAS, data=body, method="POST",
+        headers={"Content-Type": "application/json; charset=UTF-8"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return 200 <= res.status < 300
+    except urllib.error.HTTPError as err:
+        print(f"[error] gchat: HTTP {err.code}", file=sys.stderr)
+        return False
+    except Exception:
+        print("[error] gchat: error de red", file=sys.stderr)
+        return False
+
+
+def _notificar(texto: str) -> bool:
+    """Doble envío: manda el mismo aviso a Slack y a Google Chat, y devuelve el
+    veredicto de SLACK. Ese veredicto es el que decide si la transición queda
+    registrada en el estado, así que el canal nuevo no puede alterarlo: si Chat
+    fallara y mandara el resultado, el watchdog re-notificaría en la siguiente
+    corrida un aviso que Slack ya entregó."""
+    ok_slack = _post_slack(texto)
+    _post_gchat(texto)
+    return ok_slack
+
+
 def _fmt_min(minutos: float) -> str:
     return f"{minutos:.0f} min" if minutos < 120 else f"{minutos / 60:.1f} h"
 
@@ -198,7 +254,7 @@ def run(now: datetime | None = None) -> int:
                 f"Archivo: `{path.name}` — última actualización {detalle} (umbral: {umbral_min} min)\n"
                 f"Implica: {impacto}\n"
                 f"Revisa: `docker logs clima-ingesta` y el `ingesta.log`")
-            if _post_slack(texto):
+            if _notificar(texto):
                 estado[clave] = {"since": now.isoformat(), "last_notified": now.isoformat()}
                 cambios = True
         elif fallando and prev is not None:
@@ -210,12 +266,12 @@ def run(now: datetime | None = None) -> int:
                     f":red_circle: *Vigía* (recordatorio) — {nombre} sigue sin actualizar\n"
                     f"Archivo: `{path.name}` — caído desde hace {caido_desde}\n"
                     f"Revisa: `docker logs clima-ingesta` y el `ingesta.log`")
-                if _post_slack(texto):
+                if _notificar(texto):
                     prev["last_notified"] = now.isoformat()
                     cambios = True
         elif not fallando and prev is not None:
             texto = f":large_green_circle: *Vigía* — {nombre} se recuperó (`{path.name}`)"
-            if _post_slack(texto):
+            if _notificar(texto):
                 del estado[clave]
                 cambios = True
 
@@ -230,11 +286,12 @@ def main() -> int:
                      help="manda un único mensaje de prueba al webhook real y termina")
     args = ap.parse_args()
 
-    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL):
+    if not (config.SLACK_BOT_TOKEN or config.SLACK_WEBHOOK_URL
+            or config.GCHAT_WEBHOOK_ALERTAS):
         return 0
 
     if args.test:
-        return 0 if _post_slack("✅ Vigía watchdog operativo — mensaje de prueba") else 1
+        return 0 if _notificar("✅ Vigía watchdog operativo — mensaje de prueba") else 1
 
     return run()
 

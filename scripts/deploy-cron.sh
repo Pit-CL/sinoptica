@@ -87,6 +87,22 @@ slack_post() {
   deploy_slack_post "$SLACK_CHANNEL" "$1" "$(slack_token)"
 }
 
+# Doble envío a Google Chat (migración 2026-08-16): el mismo aviso sale también
+# a un espacio de Chat, sin retirar nada de Slack. El espacio lo elige cada
+# caller según el resultado —fallo a `alertas`, rutina a `infra`— siguiendo la
+# regla general del spec de la migración.
+#
+# `deploy_gchat_post` vive en la librería común de dotfiles. La guarda existe
+# porque este repo puede quedar mergeado ANTES que el PR de esa librería: sin
+# ella el cron moriría con "command not found" justo en el paso de avisar, que
+# es la peor forma de fallar. Con la guarda, simplemente no avisa por el canal
+# nuevo hasta que la librería esté.
+#   gchat_post <espacio> <texto>
+gchat_post() {
+  command -v deploy_gchat_post >/dev/null 2>&1 || return 0
+  deploy_gchat_post "$1" "[VIGIA] $2"
+}
+
 # --- 1. Lock: evita corridas solapadas ---
 deploy_lock "$LOCK" "vigia-deploy-cron"
 
@@ -111,6 +127,7 @@ if [ -n "$PR_LIST" ]; then
     printf '%s\n' "$TEXT" >>"$DEPLOY_LOG"
   else
     slack_post "$TEXT" || deploy_log "ADVERTENCIA: el recordatorio de PRs no se pudo enviar"
+    gchat_post infra "$TEXT"
   fi
 else
   deploy_log "Sin PRs abiertos — sin recordatorio"
@@ -140,8 +157,10 @@ if [ "$MARKER_RC" -eq 2 ]; then
     deploy_log "[DRY_RUN] omitiendo escritura del marker y aviso a Slack"
   else
     printf '%s\n' "$REMOTE_SHA" >"$MARKER"
-    slack_post "🟡 Deploy automático de Vigía inicializado en main \`${REMOTE_SHA:0:7}\`. Lo anterior a este commit NO se auto-deploya: si hay cambios pendientes de subir, corre \`bash deploy/deploy.sh\` a mano." \
+    BOOTSTRAP_TEXT="🟡 Deploy automático de Vigía inicializado en main \`${REMOTE_SHA:0:7}\`. Lo anterior a este commit NO se auto-deploya: si hay cambios pendientes de subir, corre \`bash deploy/deploy.sh\` a mano."
+    slack_post "$BOOTSTRAP_TEXT" \
       && deploy_log "aviso de bootstrap enviado a Slack"
+    gchat_post infra "$BOOTSTRAP_TEXT"
   fi
   deploy_log "=== fin ==="
   exit 0
@@ -179,13 +198,17 @@ deploy_log "deploy/deploy.sh terminó con exit $DEPLOY_RC"
 if [ "$DEPLOY_RC" -eq 0 ]; then
   printf '%s\n' "$REMOTE_SHA" >"$MARKER"
   deploy_log "deploy OK, marker en $REMOTE_SHA"
-  slack_post "$(printf '🟢 Deploy automático de Vigía OK — main `%s` en prod, smoke test verde.' "${REMOTE_SHA:0:7}")" \
+  OK_TEXT="$(printf '🟢 Deploy automático de Vigía OK — main `%s` en prod, smoke test verde.' "${REMOTE_SHA:0:7}")"
+  slack_post "$OK_TEXT" \
     && deploy_log "notificación de éxito enviada a Slack"
+  gchat_post infra "$OK_TEXT"
 else
   TAIL="$(tail -n 15 "$DEPLOY_LOG")"
   deploy_log "FALLO: el deploy salió con exit $DEPLOY_RC, el marker queda en $DEPLOY_LAST_SHA"
-  slack_post "$(printf '🔴 Deploy automático de Vigía FALLÓ (main `%s`, exit %s). Prod queda en la versión anterior; el próximo tick reintenta.\nRevisar %s\nÚltimas líneas:\n```\n%s\n```' "${REMOTE_SHA:0:7}" "$DEPLOY_RC" "$DEPLOY_LOG" "$TAIL")" \
+  FAIL_TEXT="$(printf '🔴 Deploy automático de Vigía FALLÓ (main `%s`, exit %s). Prod queda en la versión anterior; el próximo tick reintenta.\nRevisar %s\nÚltimas líneas:\n```\n%s\n```' "${REMOTE_SHA:0:7}" "$DEPLOY_RC" "$DEPLOY_LOG" "$TAIL")"
+  slack_post "$FAIL_TEXT" \
     && deploy_log "notificación de fallo enviada a Slack"
+  gchat_post alertas "$FAIL_TEXT"
   deploy_log "=== fin ==="
   exit 1
 fi
