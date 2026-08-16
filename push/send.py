@@ -13,7 +13,9 @@ con umbral más bajo — ver `_cumple()`.
 
 Además del Web Push, en el mismo ciclo se procesa un suscriptor de canal
 interno multi-zona (GCHAT_ZONAS, con fallback a la zona única legacy
-GCHAT_ZONA_LAT/LON/REGION) — ver `_procesar_gchat()`. Dormido si no hay
+GCHAT_ZONA_LAT/LON/REGION — y de ahí a los nombres pre-migración
+SLACK_ZONAS/SLACK_ZONA_LAT/LON/REGION, para no quedar mudo si el .env de
+prod aún no fue renombrado) — ver `_procesar_gchat()`. Dormido si no hay
 GCHAT_WEBHOOK_ALERTAS configurada (mismo patrón que ingesta/watchdog.py).
 Transporte: webhook del espacio `alertas` de Google Chat, único canal desde
 el 2026-08-16 — antes era Slack (bot Heraldo con fallback a webhook) y se
@@ -96,7 +98,11 @@ MAG_MIN_ZONA_PISO = 4.5
 # ingesta/watchdog.py y combustible.py). Mismo espacio `alertas` que usa el
 # watchdog: estas son alertas accionables del producto, no rutina.
 GCHAT_WEBHOOK_ALERTAS = os.environ.get("GCHAT_WEBHOOK_ALERTAS", "")
-GCHAT_ZONA_REGION = os.environ.get("GCHAT_ZONA_REGION", "")
+# Fallback a los nombres SLACK_ZONA_* pre-migración: es como está configurado
+# /opt/vigia/.env hoy (el deploy no regenera el .env, solo lo excluye del
+# rsync) y sin este fallback el canal de emergencia queda mudo en silencio
+# hasta que alguien rename a mano las variables en el servidor.
+GCHAT_ZONA_REGION = os.environ.get("GCHAT_ZONA_REGION") or os.environ.get("SLACK_ZONA_REGION", "")
 
 # ── Claim VAPID 'sub' (RFC 8292) ────────────────────────────────
 # pywebpush exige vapid_claims={"sub": "mailto:..."} para firmar el push;
@@ -108,16 +114,16 @@ GCHAT_ZONA_REGION = os.environ.get("GCHAT_ZONA_REGION", "")
 VAPID_SUB = os.environ.get("VAPID_SUB", "")
 
 
-def _float_env(nombre: str):
-    valor = os.environ.get(nombre, "")
+def _float_env(nombre: str, legacy: str = ""):
+    valor = os.environ.get(nombre, "") or (os.environ.get(legacy, "") if legacy else "")
     try:
         return float(valor) if valor else None
     except ValueError:
         return None
 
 
-GCHAT_ZONA_LAT = _float_env("GCHAT_ZONA_LAT")
-GCHAT_ZONA_LON = _float_env("GCHAT_ZONA_LON")
+GCHAT_ZONA_LAT = _float_env("GCHAT_ZONA_LAT", "SLACK_ZONA_LAT")
+GCHAT_ZONA_LON = _float_env("GCHAT_ZONA_LON", "SLACK_ZONA_LON")
 
 # Avisos Vigía / incendios: radio de cercanía a la zona (constantes propias,
 # distintas de RADIO_KM_ZONA que es para sismos).
@@ -348,14 +354,15 @@ def _cargar_zonas() -> list[dict]:
        loguea un error SIN el valor crudo (podría no ser sensible, pero no
        hay necesidad de imprimirlo) y se devuelve lista vacía — el operador
        queda sin avisos hasta corregir el env, no falla el resto del cron.
-    2. Fallback legacy: GCHAT_ZONA_LAT/LON/REGION arma una zona única
-       llamada "zona" (mismo nombre que usaba el mensaje de prueba antes de
-       multi-zona) — es la forma en que está configurado el .env de prod.
-       Se marca `legacy=True` para que `_procesar_gchat` también consulte el
-       endpoint `slack:zona` (esquema pre multi-zona) en el dedup de esta
-       zona y no re-spamee lo ya enviado.
+    2. Fallback legacy: GCHAT_ZONA_LAT/LON/REGION (o SLACK_ZONA_LAT/LON/REGION,
+       nombres pre-migración) arma una zona única llamada "zona" (mismo
+       nombre que usaba el mensaje de prueba antes de multi-zona) — es la
+       forma en que está configurado el .env de prod. Se marca `legacy=True`
+       para que `_procesar_gchat` también consulte el endpoint `slack:zona`
+       (esquema pre multi-zona) en el dedup de esta zona y no re-spamee lo ya
+       enviado.
     """
-    raw = os.environ.get("GCHAT_ZONAS", "")
+    raw = os.environ.get("GCHAT_ZONAS", "") or os.environ.get("SLACK_ZONAS", "")
     if raw.strip():
         try:
             data = json.loads(raw)
