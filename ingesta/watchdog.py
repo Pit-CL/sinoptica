@@ -21,9 +21,10 @@ ruta de envío mientras el bot no esté invitado a todos los canales.
 
 Doble envío (migración 2026-08-16): el mismo aviso sale además al espacio
 `alertas` de Google Chat vía GCHAT_WEBHOOK_ALERTAS, sin retirar nada de
-Slack. El veredicto que decide las transiciones de estado sigue siendo el de
-Slack (ver `_notificar`), para que el canal nuevo no pueda provocar
-re-notificaciones si falla.
+Slack. El veredicto que decide las transiciones de estado es el de CUALQUIERA
+de los dos canales (ver `_notificar`): si uno de los dos falla de forma
+persistente mientras el otro sigue sano, la transición igual queda registrada
+y no se re-notifica en cada corrida.
 
 Nunca debe filtrar el webhook ni el token: urllib incluye la URL completa
 en sus excepciones, así que el manejo de errores solo reporta "HTTP
@@ -220,14 +221,15 @@ def _post_gchat(texto: str) -> bool:
 
 
 def _notificar(texto: str) -> bool:
-    """Doble envío: manda el mismo aviso a Slack y a Google Chat, y devuelve el
-    veredicto de SLACK. Ese veredicto es el que decide si la transición queda
-    registrada en el estado, así que el canal nuevo no puede alterarlo: si Chat
-    fallara y mandara el resultado, el watchdog re-notificaría en la siguiente
-    corrida un aviso que Slack ya entregó."""
+    """Doble envío: manda el mismo aviso a Slack y a Google Chat, y devuelve
+    verdadero si CUALQUIERA de los dos entregó. Ese veredicto es el que decide
+    si la transición queda registrada en el estado: si dependiera solo de
+    Slack, un fallo persistente de Slack con Chat sano (o viceversa) haría que
+    el watchdog re-notificara el mismo aviso en cada corrida, justo el spam
+    que el anti-spam existe para evitar."""
     ok_slack = _post_slack(texto)
-    _post_gchat(texto)
-    return ok_slack
+    ok_gchat = _post_gchat(texto)
+    return ok_slack or ok_gchat
 
 
 def _fmt_min(minutos: float) -> str:
