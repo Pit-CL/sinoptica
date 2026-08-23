@@ -4,11 +4,10 @@
 
 **Clima verificable y centro de riesgos naturales para todo Chile — gratis, sin publicidad, sin tracking.**
 
-[![Ver en vivo](https://img.shields.io/badge/▞_ver_en_vivo-vigia.cavara.cl-c8451f?style=for-the-badge)](https://vigia.cavara.cl)
+[![Servicio descontinuado](https://img.shields.io/badge/servicio-descontinuado-6b6b6b?style=for-the-badge)](#-servicio-descontinuado)
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-2456c9?style=for-the-badge)](LICENSE)
-[![PWA](https://img.shields.io/badge/PWA-instalable-0e9888?style=for-the-badge)](https://vigia.cavara.cl)
 [![Python stdlib](https://img.shields.io/badge/python-solo_stdlib-3776ab?style=for-the-badge)](ingesta/)
-[![Hecho en Chile](https://img.shields.io/badge/hecho_en-Chile-d52b1e?style=for-the-badge)](https://vigia.cavara.cl)
+[![Hecho en Chile](https://img.shields.io/badge/hecho_en-Chile-d52b1e?style=for-the-badge)](#)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
@@ -20,6 +19,16 @@
 | <img src="docs/hero-light-mapa.png" width="100%"> | <img src="docs/hero-dark-mapa.png" width="100%"> |
 
 </div>
+
+## ⚠️ Servicio descontinuado
+
+**El 23 de agosto de 2026 se dio de baja el servicio.** `vigia.cavara.cl` ya no está en línea, la ingesta de datos se detuvo y las notificaciones push dejaron de enviarse. No hay plan de reactivación.
+
+Era un proyecto personal sin fines comerciales y el costo de operarlo dejó de justificarse frente al uso que tenía. El repositorio queda publicado como referencia: **el código es funcional y está completo**, con licencia MIT. Cualquiera puede desplegarlo por su cuenta siguiendo [`docs/DEPLOY.md`](docs/DEPLOY.md) — necesitarás tus propias credenciales para las fuentes de datos (DMC, NASA FIRMS, Cloudflare, Web Push).
+
+Lo que sigue documenta el sistema tal como funcionaba, en presente. Se deja así a propósito: describe lo que el código hace, no lo que el servicio ofrece hoy.
+
+---
 
 ## ¿Qué es?
 
